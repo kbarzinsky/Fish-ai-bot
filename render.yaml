@@ -1,0 +1,5 @@
+services:
+  - type: worker
+    name: fish-ai-bot
+    env: python
+    startCommand: python main.py
