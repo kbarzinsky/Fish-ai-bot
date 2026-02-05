@@ -1,9 +1,13 @@
 import os
-import asyncio
 import requests
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
+import asyncio
+import nest_asyncio
+
+# Разрешаем вложенные event loops (для Railway)
+nest_asyncio.apply()
 
 try:
     from openai import OpenAI
@@ -30,7 +34,7 @@ if OPENAI_API_KEY and OPENAI_INSTALLED:
 
 SYSTEM_PROMPT = """
 Ты профессиональный рыбак-эксперт.
-Отвечай по погоде, давлению, клёву, снастях и приманках.
+Отвечай по погоде, давлению, ветру, времени клёва, снастях и приманках.
 Давай рекомендации кратко, по делу и конкретно.
 """
 
@@ -44,8 +48,13 @@ def get_weather(city: str):
         data = r.json()
         temp = data["main"]["temp"]
         pressure = data["main"]["pressure"]
+        wind = data["wind"]["speed"]
         description = data["weather"][0]["description"]
-        return data, f"{city}: {description}, Температура: {temp}°C, Давление: {pressure} hPa"
+        weather_text = (f"{city}: {description}, "
+                        f"Температура: {temp}°C, "
+                        f"Давление: {pressure} hPa, "
+                        f"Ветер: {wind} м/с")
+        return data, weather_text
     except Exception as e:
         return None, f"Ошибка получения погоды: {e}"
 
@@ -113,7 +122,7 @@ async def main():
     print("Бот запущен и ждёт сообщений...")
     await app.run_polling()
 
-# --- ВНИМАНИЕ: исправлено! ---
+# --- Главное: исправлено, asyncio loop для Railway ---
 if __name__ == "__main__":
-
-    asyncio.run(main())
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
