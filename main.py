@@ -1,53 +1,71 @@
 import os
+import asyncio
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, filters
-from openai import OpenAI
+from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
+
+try:
+    from openai import OpenAI
+    OPENAI_INSTALLED = True
+except ImportError:
+    OPENAI_INSTALLED = False
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+BOT_USERNAME = "@fish_ai_bot"  # замените на username вашего бота
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+if not BOT_TOKEN:
+    print("Ошибка: BOT_TOKEN не задан!")
+if not OPENAI_API_KEY:
+    print("Внимание: OPENAI_API_KEY не задан — бот будет отвечать тестовыми сообщениями")
+
+if OPENAI_API_KEY and OPENAI_INSTALLED:
+    client = OpenAI(api_key=OPENAI_API_KEY)
+else:
+    client = None
 
 SYSTEM_PROMPT = """
-Ты профессиональный рыбак-эксперт с большим практическим опытом.
-Ты отлично разбираешься в:
-- погоде и её влиянии на клёв
-- атмосферном давлении и его изменениях
-- сезонном поведении рыбы
-- снастях, приманках и оснастках
-- проводках и подаче приманки
-
-При ответе:
-1. Учитывай погоду, давление, ветер, сезон.
-2. Объясняй, как это влияет на активность рыбы.
-3. Даёшь конкретные советы: где, на что и как ловить.
-4. Если данных не хватает — задай 1 уточняющий вопрос.
-5. Отвечай кратко, по делу, без воды.
-6. Общайся как опытный рыбак рыбаку.
+Ты профессиональный рыбак-эксперт с большим опытом.
+Ты умеешь:
+- предсказывать клёв по погоде, давлению, ветру и сезону
+- давать советы по снастям и приманкам
+- объяснять, как лучше ловить рыбу в конкретных условиях
+Отвечай кратко, по делу, как опытный рыбак рыбаку.
 """
 
-async def handler(update: Update, context):
+async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
 
     text = update.message.text.lower()
-
-    # реагируем только на команду или упоминание
-    if not ("/fish" in text or "@Recru1TFish_AI_bot" in text):
+    if not ("/fish" in text or BOT_USERNAME in text):
         return
 
-    response = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": update.message.text}
-        ]
-    )
+    if client:
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4.1-mini",
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": update.message.text}
+                ]
+            )
+            answer = response.choices[0].message.content
+        except Exception as e:
+            answer = f"Ошибка OpenAI: {e}\nПопробуй позже."
+    else:
+        answer = "Бот живой! Тестовый ответ без OpenAI."
 
-    await update.message.reply_text(
-        response.choices[0].message.content
-    )
+    await update.message.reply_text(answer)
 
-app = ApplicationBuilder().token(BOT_TOKEN).build()
-app.add_handler(MessageHandler(filters.TEXT, handler))
-app.run_polling()
+async def main():
+    if not BOT_TOKEN:
+        print("BOT_TOKEN отсутствует, бот не будет запущен.")
+        return
+
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(MessageHandler(filters.TEXT, handler))
+    print("Бот запущен и ждёт сообщений...")
+    await app.run_polling()
+
+if name == "main":
+    asyncio.run(main())
