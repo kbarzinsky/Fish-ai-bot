@@ -9,14 +9,15 @@ try:
 except ImportError:
     OPENAI_INSTALLED = False
 
+# --- Токены через ENV ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-BOT_USERNAME = "@fish_ai_bot"  # замените на username вашего бота
+BOT_USERNAME = "@Recru1TFish_AI_bot"  # Замените на username вашего бота
 
 if not BOT_TOKEN:
     print("Ошибка: BOT_TOKEN не задан!")
 if not OPENAI_API_KEY:
-    print("Внимание: OPENAI_API_KEY не задан — бот будет отвечать тестовыми сообщениями")
+    print("OpenAI ключ не задан — бот будет работать в тестовом режиме")
 
 if OPENAI_API_KEY and OPENAI_INSTALLED:
     client = OpenAI(api_key=OPENAI_API_KEY)
@@ -24,12 +25,9 @@ else:
     client = None
 
 SYSTEM_PROMPT = """
-Ты профессиональный рыбак-эксперт с большим опытом.
-Ты умеешь:
-- предсказывать клёв по погоде, давлению, ветру и сезону
-- давать советы по снастям и приманкам
-- объяснять, как лучше ловить рыбу в конкретных условиях
-Отвечай кратко, по делу, как опытный рыбак рыбаку.
+Ты профессиональный рыбак-эксперт.
+Отвечай по погоде, давлению, клёву, снастях и приманках.
+Кратко и по делу.
 """
 
 async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -53,7 +51,7 @@ async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             answer = f"Ошибка OpenAI: {e}\nПопробуй позже."
     else:
-        answer = "Бот живой! Тестовый ответ без OpenAI."
+        answer = "Бот живой! Токен OpenAI не задан, ответ тестовый."
 
     await update.message.reply_text(answer)
 
