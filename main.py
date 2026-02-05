@@ -63,7 +63,7 @@ def bite_rating(temp, pressure, wind):
 # ===== COMMANDS =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🎣 Рыболовный бот готов!\n\n"
+        "🎣 Рыболовный бот Кирюхи готов!\n\n"
         "Команды:\n"
         "/weather <город> — погода\n"
         "/fish <город> — прогноз клёва\n"
