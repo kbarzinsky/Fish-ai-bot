@@ -41,7 +41,7 @@ def get_weather(city: str):
 # ===== BITE LOGIC =====
 def bite_rating(temp, pressure, wind):
     score = 0
-    mm = pressure * 0.75006  # hPa -> mmHg
+    mm = pressure * 0.72271  # hPa -> mmHg
     if 745 <= mm <= 760:
         score += 2
     elif 735 <= mm <= 770:
