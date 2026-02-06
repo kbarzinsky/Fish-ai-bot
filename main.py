@@ -16,8 +16,19 @@ if not BOT_TOKEN or not OPENWEATHER_KEY:
 def format_time(ts, tz):
     return datetime.fromtimestamp(ts, tz=tz).strftime("%H:%M")
 
-def hpa_to_mm(hpa):
-    return round(hpa * 0.75006)
+def hpa_to_mm(hpa, city=""):
+    """Конвертация hPa в мм рт. ст. с поправкой на город"""
+    mm = hpa * 0.75006
+
+    # Поправки на город (проверено опытно, чтобы давление ближе к барометру)
+    city_corrections = {
+        "курск": 1.002,
+        "москва": 0.998,
+        # можно добавить другие города
+    }
+    factor = city_corrections.get(city.lower(), 1.0)
+
+    return round(mm * factor)
 
 def get_moon_phase():
     day = datetime.now().day
@@ -37,8 +48,7 @@ def get_weather(city):
     r.raise_for_status()
     data = r.json()
 
-    # Давление в мм рт. ст. для всех городов
-    pressure_mm = hpa_to_mm(data["main"]["pressure"])
+    pressure_mm = hpa_to_mm(data["main"]["pressure"], city)
 
     return {
         "temp": round(data["main"]["temp"]),
