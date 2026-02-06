@@ -64,6 +64,31 @@ def bite_rating(temp, pressure, wind, humidity, water_temp, hour):
 def rating_emoji(rating):
     return "🎣" * rating + "⚪" * (5 - rating)
 
+def water_temp_emoji(temp):
+    if temp is None:
+        return "—"
+    if temp < 10:
+        return "❄️"
+    elif 10 <= temp <= 18:
+        return "🌊"
+    else:
+        return "☀️"
+
+def forecast_card(day, temp_day, temp_night, humidity, wind, pressure, water_temp, rating):
+    emoji_rating_val = rating_emoji(rating)
+    water_emoji = water_temp_emoji(water_temp)
+    card = (
+        f"*📅 {day.strftime('%a %d.%m')}*\n"
+        f"🌡 День: {temp_day}°C, Ночь: {temp_night}°C\n"
+        f"💧 Влажность: {humidity}%\n"
+        f"💨 Ветер: {wind} м/с\n"
+        f"🧭 Давление: {pressure} мм рт.ст. ({pressure_comment(pressure)})\n"
+        f"🌊 Вода: {water_temp}°C {water_emoji}\n"
+        f"🎯 Клев: {rating}/5 {emoji_rating_val}\n"
+        f"🌙 Луна: {get_moon_phase()}\n\n"
+    )
+    return card
+
 # ---------- WEATHER ----------
 def get_weather(city):
     url = "https://api.openweathermap.org/data/2.5/weather"
@@ -110,19 +135,6 @@ def get_week_forecast_full(city):
         lat = data["city"]["coord"]["lat"]
         lon = data["city"]["coord"]["lon"]
         tz_offset = timedelta(seconds=data["city"]["timezone"])
-        moon = get_moon_phase()
-
-        # Получаем sunrise/sunset для каждого дня через onecall
-        url_onecall = "https://api.openweathermap.org/data/2.5/onecall"
-        params_onecall = {
-            "lat": lat, "lon": lon,
-            "appid": OPENWEATHER_KEY,
-            "units": "metric",
-            "exclude": "minutely,hourly,alerts,current"
-        }
-        r2 = requests.get(url_onecall, params=params_onecall, timeout=10)
-        r2.raise_for_status()
-        daily_data = r2.json().get("daily", [])
 
         days = {}
         for item in data["list"]:
@@ -154,28 +166,7 @@ def get_week_forecast_full(city):
             wind_avg = round(sum(values["wind"]) / len(values["wind"]), 1)
             water_temp = get_water_temp(lat, lon)
             rating = bite_rating(temp_day, pressure_avg, wind_avg, humidity_avg, water_temp, 9)
-            emoji = rating_emoji(rating)
-
-            # Sunrise/sunset для этого дня
-            sunrise_time = sunset_time = "—"
-            if len(daily_data) >= count:
-                sunrise_time = datetime.utcfromtimestamp(daily_data[count-1]["sunrise"]) + tz_offset
-                sunset_time = datetime.utcfromtimestamp(daily_data[count-1]["sunset"]) + tz_offset
-                sunrise_time = sunrise_time.strftime("%H:%M")
-                sunset_time = sunset_time.strftime("%H:%M")
-
-            forecast_text += (
-                f"*📅 {day.strftime('%a %d.%m')}*\n"
-                f"🌡 День: {temp_day}°C, Ночь: {temp_night}°C\n"
-                f"💧 Влажность: {humidity_avg}%\n"
-                f"💨 Ветер: {wind_avg} м/с\n"
-                f"🧭 Давление: {pressure_avg} мм рт.ст. ({pressure_comment(pressure_avg)})\n"
-            )
-            if water_temp is not None:
-                forecast_text += f"🌊 Температура воды: {water_temp}°C\n"
-            forecast_text += f"🌅 Восход: {sunrise_time}, 🌇 Закат: {sunset_time}\n"
-            forecast_text += f"🌙 Луна: {moon}\n"
-            forecast_text += f"🎯 Клев: {rating}/5 {emoji}\n\n"
+            forecast_text += forecast_card(day, temp_day, temp_night, humidity_avg, wind_avg, pressure_avg, water_temp, rating)
 
         return forecast_text
 
@@ -198,38 +189,16 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tz_offset = timedelta(seconds=w["timezone_offset"])
     local_now = datetime.utcnow() + tz_offset
     hour = local_now.hour
-
     rating = bite_rating(w["temp"], w["pressure_mm"], w["wind"], w["humidity"], water, hour)
-    emoji_rating_val = rating_emoji(rating)
-    sunrise_time = (datetime.utcfromtimestamp(w["sunrise"]) + tz_offset).strftime("%H:%M")
-    sunset_time = (datetime.utcfromtimestamp(w["sunset"]) + tz_offset).strftime("%H:%M")
-    moon = get_moon_phase()
 
-    text = (
-        f"*🎣 Рыбацкая метео-станция от Кирюхи*\n\n"
-        f"*📍 Город:* {city}\n"
-        f"*🕒 Сейчас:* {local_now.strftime('%H:%M')}\n\n"
-        f"*🌡 Воздух:* {w['temp']}°C\n"
-        f"*💧 Влажность:* {w['humidity']} %\n"
-        f"*💨 Ветер:* {w['wind']} м/с\n"
-        f"*🧭 Давление:* {w['pressure_mm']} мм рт.ст. ({pressure_comment(w['pressure_mm'])})\n"
-        f"*🌅 Восход:* {sunrise_time}\n"
-        f"*🌇 Закат:* {sunset_time}\n"
-    )
-
-    if water is not None:
-        text += f"*🌊 Температура воды:* {water}°C\n"
-
-    text += f"\n*🌙 Луна:* {moon}\n"
-    text += f"*🎯 Клев:* {rating}/5 {emoji_rating_val}"
-
+    text = forecast_card(local_now, w["temp"], w["temp"], w["humidity"], w["wind"], w["pressure_mm"], water, rating)
+    text = "*🎣 Рыбацкая метео-станция от Кирюхи*\n\n" + text
     await update.message.reply_text(text, parse_mode="Markdown")
 
 async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     city = "Курск"
     if context.args:
         city = " ".join(context.args)
-
     forecast_text = get_week_forecast_full(city)
     await update.message.reply_text(f"*Прогноз на 5 дней для {city}:*\n\n{forecast_text}", parse_mode="Markdown")
 
