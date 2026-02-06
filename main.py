@@ -1,6 +1,6 @@
 import os
 import requests
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -37,12 +37,8 @@ def get_weather(city):
     r.raise_for_status()
     data = r.json()
 
-    pressure_hpa = data["main"]["pressure"]
-    # Для Курска фиксируем давление 742 мм
-    if city.lower() == "курск":
-        pressure_mm = 742
-    else:
-        pressure_mm = hpa_to_mm(pressure_hpa)
+    # Давление в мм рт. ст. для всех городов
+    pressure_mm = hpa_to_mm(data["main"]["pressure"])
 
     return {
         "temp": round(data["main"]["temp"]),
@@ -137,7 +133,7 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
     emoji_rating = rating_emoji(rating)
 
     text = (
-        f"*🎣 Рыбацкая метео-станция*\n\n"
+        f"*🎣 Рыбацкая метео-станция от Кирюхи*\n\n"
         f"*📍 Город:* {city}\n"
         f"*🕒 Сейчас:* {local_now.strftime('%H:%M')}\n\n"
         f"*🌡 Воздух:* {w['temp']}°C\n"
