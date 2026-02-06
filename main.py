@@ -2,16 +2,14 @@ import os
 import requests
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
-
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+import pytz  # для точного локального времени
 
 # ---------- LOAD ENV ----------
 load_dotenv()
-
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY")
-
 if not BOT_TOKEN or not OPENWEATHER_KEY:
     raise RuntimeError("❌ Не заданы переменные окружения BOT_TOKEN или OPENWEATHER_KEY")
 
@@ -23,7 +21,6 @@ def hpa_to_mm(hpa):
     return round(hpa * 0.75006)
 
 def get_moon_phase():
-    """Возвращает эмоджи фазы Луны"""
     day = datetime.now().day
     phases = ["🌑","🌒","🌓","🌔","🌕","🌖","🌗","🌘"]
     return phases[(day * 8 // 30) % 8]
@@ -37,11 +34,9 @@ def get_weather(city):
         "units": "metric",
         "lang": "ru"
     }
-
     r = requests.get(url, params=params, timeout=10)
     r.raise_for_status()
     data = r.json()
-
     return {
         "temp": round(data["main"]["temp"]),
         "humidity": data["main"]["humidity"],
@@ -50,7 +45,8 @@ def get_weather(city):
         "sunrise": data["sys"]["sunrise"],
         "sunset": data["sys"]["sunset"],
         "lat": data["coord"]["lat"],
-        "lon": data["coord"]["lon"]
+        "lon": data["coord"]["lon"],
+        "timezone_offset": data.get("timezone", 0)  # смещение в секундах
     }
 
 def get_water_temp(lat, lon):
@@ -63,7 +59,6 @@ def get_water_temp(lat, lon):
             "units": "metric",
             "exclude": "minutely,hourly,alerts"
         }
-
         r = requests.get(url, params=params, timeout=10)
         r.raise_for_status()
         data = r.json()
@@ -74,28 +69,32 @@ def get_water_temp(lat, lon):
 # ---------- BITE LOGIC ----------
 def bite_rating(temp, pressure, wind, humidity, water_temp, hour):
     score = 0
-
-    if 745 <= pressure <= 755:
+    # Давление: идеальное около 738 мм
+    if 735 <= pressure <= 741:
         score += 3
-    elif 740 <= pressure <= 760:
+    elif 732 <= pressure < 735 or 741 < pressure <= 745:
         score += 2
     else:
         score -= 1
 
+    # Ветер
     if 1 <= wind <= 4:
         score += 2
     elif wind > 7:
         score -= 2
 
+    # Влажность
     if humidity >= 60:
         score += 1
 
+    # Температура воды
     if water_temp is not None:
         if 12 <= water_temp <= 22:
             score += 2
         else:
             score -= 1
 
+    # Время суток
     if hour in range(5, 10) or hour in range(18, 22):
         score += 2
 
@@ -113,25 +112,28 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         w = get_weather(city)
     except Exception as e:
-        await update.message.reply_text(f"Ошибка при получении погоды: {e}")
+        await update.message.reply_text(f"Ошибка при получении погоды для {city}: {e}")
         return
 
     water = get_water_temp(w["lat"], w["lon"])
-    hour = datetime.now().hour
+
+    # Локальное время города через смещение timezone
+    tz_city = timezone(timedelta(seconds=w["timezone_offset"]))
+    hour = datetime.now(tz=tz_city).hour
+
     rating = bite_rating(
         w["temp"], w["pressure_mm"], w["wind"], w["humidity"], water, hour
     )
 
-    tz_kursk = timezone(timedelta(hours=3))
-    sunrise_time = format_time(w['sunrise'], tz_kursk)
-    sunset_time = format_time(w['sunset'], tz_kursk)
+    sunrise_time = format_time(w['sunrise'], tz_city)
+    sunset_time = format_time(w['sunset'], tz_city)
     moon = get_moon_phase()
     emoji_rating = rating_emoji(rating)
 
     text = (
         f"*🎣 Рыбацкая метео-станция*\n\n"
         f"*📍 Город:* {city}\n"
-        f"*🕒 Сейчас:* {datetime.now(tz=tz_kursk).strftime('%H:%M')}\n\n"
+        f"*🕒 Сейчас:* {datetime.now(tz=tz_city).strftime('%H:%M')}\n\n"
         f"*🌡 Воздух:* {w['temp']}°C\n"
         f"*💧 Влажность:* {w['humidity']} %\n"
         f"*💨 Ветер:* {w['wind']} м/с\n"
@@ -152,8 +154,7 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("station", station))
-
-    print("Бот запущен! Отправьте /station в Telegram")
+    print("Бот запущен! Отправьте /station <город> в Telegram")
     app.run_polling()
 
 if __name__ == "__main__":
