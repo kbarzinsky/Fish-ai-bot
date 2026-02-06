@@ -1,146 +1,144 @@
 import os
 import requests
-import openai
+from datetime import datetime
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from asyncio import Lock
+from telegram.ext import Application, CommandHandler, ContextTypes
 
-# ===== ENV =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN not set")
-if not OPENWEATHER_KEY:
-    raise RuntimeError("OPENWEATHER_KEY not set")
-if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY not set")
+if not BOT_TOKEN or not OPENWEATHER_KEY:
+    raise RuntimeError("❌ Не заданы переменные окружения")
 
-openai.api_key = OPENAI_API_KEY
+# ---------- UTILS ----------
 
-# ===== Lock для очереди запросов к OpenAI (защита от 429) =====
-openai_lock = Lock()
+def format_time(ts):
+    return datetime.fromtimestamp(ts).strftime("%H:%M")
 
+def hpa_to_mm(hpa):
+    return round(hpa * 0.75006)
 
-# ===== WEATHER =====
-def get_weather(city: str):
-    url = (
-        "https://api.openweathermap.org/data/2.5/weather"
-        f"?q={city}&appid={OPENWEATHER_KEY}&units=metric&lang=ru"
-    )
-    r = requests.get(url, timeout=10)
+# ---------- WEATHER ----------
+
+def get_weather(city):
+    url = "https://api.openweathermap.org/data/2.5/weather"
+    params = {
+        "q": city,
+        "appid": OPENWEATHER_KEY,
+        "units": "metric",
+        "lang": "ru"
+    }
+    r = requests.get(url, params=params, timeout=10)
+    r.raise_for_status()
     data = r.json()
-    temp = data["main"]["temp"]
-    pressure = data["main"]["pressure"]  # hPa
-    wind = data["wind"]["speed"]
-    desc = data["weather"][0]["description"]
-    return temp, pressure, wind, desc
 
+    return {
+        "temp": round(data["main"]["temp"]),
+        "humidity": data["main"]["humidity"],
+        "wind": round(data["wind"]["speed"], 1),
+        "pressure_mm": hpa_to_mm(data["main"]["pressure"]),
+        "sunrise": data["sys"]["sunrise"],
+        "sunset": data["sys"]["sunset"],
+        "lat": data["coord"]["lat"],
+        "lon": data["coord"]["lon"]
+    }
 
-# ===== BITE LOGIC =====
-def bite_rating(temp, pressure, wind):
+def get_water_temp(lat, lon):
+    try:
+        url = "https://api.openweathermap.org/data/2.5/onecall"
+        params = {
+            "lat": lat,
+            "lon": lon,
+            "appid": OPENWEATHER_KEY,
+            "units": "metric",
+            "exclude": "minutely,hourly,alerts"
+        }
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        return round(data["current"].get("water_temp"))
+    except:
+        return None
+
+# ---------- BITE LOGIC ----------
+
+def bite_rating(temp, pressure, wind, humidity, water_temp, hour):
     score = 0
-    mm = pressure * 0.72760  # hPa -> mmHg
-    if 745 <= mm <= 760:
+
+    if 745 <= pressure <= 755:
+        score += 3
+    elif 740 <= pressure <= 760:
         score += 2
-    elif 735 <= mm <= 770:
-        score += 1
-    if wind <= 4:
-        score += 2
-    elif wind <= 7:
-        score += 1
-    if 10 <= temp <= 22:
-        score += 1
-    if score >= 4:
-        return "🔥 Отличный клёв"
-    elif score >= 2:
-        return "🎣 Средний клёв"
     else:
-        return "❌ Плохой клёв"
+        score -= 1
 
+    if 1 <= wind <= 4:
+        score += 2
+    elif wind > 7:
+        score -= 2
 
-# ===== COMMANDS =====
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🎣 Рыболовный бот Кирюхи готов!\n\n"
-        "Команды:\n"
-        "/weather <город> — погода\n"
-        "/fish <город> — прогноз клёва\n"
-        "/ai <вопрос> — советы ИИ"
+    if humidity >= 60:
+        score += 1
+
+    if water_temp:
+        if 12 <= water_temp <= 22:
+            score += 2
+        else:
+            score -= 1
+
+    if hour in range(5, 10) or hour in range(18, 22):
+        score += 2
+
+    return max(1, min(5, score))
+
+# ---------- HANDLER ----------
+
+async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    city = "Курск"
+    if context.args:
+        city = " ".join(context.args)
+
+    w = get_weather(city)
+    water = get_water_temp(w["lat"], w["lon"])
+    hour = datetime.now().hour
+
+    rating = bite_rating(
+        w["temp"],
+        w["pressure_mm"],
+        w["wind"],
+        w["humidity"],
+        water,
+        hour
     )
 
+    text = (
+        f"🎣 Рыбацкая метео-станция\n\n"
+        f"📍 {city}\n"
+        f"🕒 Сейчас: {datetime.now().strftime('%H:%M')}\n\n"
+        f"🌡 Воздух: {w['temp']}°C\n"
+        f"💧 Влажность: {w['humidity']}%\n"
+        f"💨 Ветер: {w['wind']} м/с\n"
+        f"🧭 Давление: {w['pressure_mm']} мм рт.ст.\n"
+        f"🌅 Восход: {format_time(w['sunrise'])}\n"
+        f"🌇 Закат: {format_time(w['sunset'])}\n"
+    )
 
-async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Пример:\n/weather Москва")
-        return
-    city = " ".join(context.args)
-    try:
-        temp, pressure, wind, desc = get_weather(city)
-        text = (
-            f"🌤 Погода в {city}\n"
-            f"Описание: {desc}\n"
-            f"🌡 Температура: {temp} °C\n"
-            f"🌬 Ветер: {wind} м/с\n"
-            f"🔽 Давление: {int(pressure * 0.75006)} мм"
-        )
-        await update.message.reply_text(text)
-    except Exception:
-        await update.message.reply_text("Ошибка получения погоды 😢")
+    if water:
+        text += f"🌊 Температура воды: {water}°C\n"
+    else:
+        text += "🌊 Температура воды: нет данных\n"
 
+    text += f"\n🐟 Клёв: {'⭐' * rating}"
 
-async def fish(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Пример:\n/fish Москва")
-        return
-    city = " ".join(context.args)
-    try:
-        temp, pressure, wind, desc = get_weather(city)
-        rating = bite_rating(temp, pressure, wind)
-        text = (
-            f"🎣 Прогноз клёва — {city}\n\n"
-            f"🌡 Температура: {temp} °C\n"
-            f"🌬 Ветер: {wind} м/с\n"
-            f"🔽 Давление: {int(pressure * 0.75006)} мм\n"
-            f"🌥 Погода: {desc}\n\n"
-            f"{rating}"
-        )
-        await update.message.reply_text(text)
-    except Exception:
-        await update.message.reply_text("Ошибка прогноза клёва 😢")
+    await update.message.reply_text(text)
 
+# ---------- MAIN ----------
 
-async def ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Пример:\n/ai Какую приманку выбрать для щуки?")
-        return
-    prompt = " ".join(context.args)
-    try:
-        async with openai_lock:  # блокировка, чтобы не перегружать API
-            response = openai.ChatCompletion.create(
-                model="gpt-4",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
-                max_tokens=300
-            )
-        answer = response.choices[0].message.content.strip()
-        await update.message.reply_text(answer)
-    except openai.error.RateLimitError:
-        await update.message.reply_text("⚠️ ИИ временно недоступен, попробуйте через пару секунд.")
-    except Exception:
-        await update.message.reply_text("Ошибка при обращении к ИИ 😢")
-
-
-# ===== MAIN =====
 def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("weather", weather))
-    app.add_handler(CommandHandler("fish", fish))
-    app.add_handler(CommandHandler("ai", ai))
+    app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("station", station))
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
+    
