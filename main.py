@@ -1,17 +1,21 @@
 import os
 import requests
 from datetime import datetime
+from dotenv import load_dotenv
+
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+
+# ---------- LOAD ENV ----------
+load_dotenv()  # Загружаем .env из корня проекта
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY")
 
 if not BOT_TOKEN or not OPENWEATHER_KEY:
-    raise RuntimeError("❌ Не заданы переменные окружения")
+    raise RuntimeError("❌ Не заданы переменные окружения BOT_TOKEN или OPENWEATHER_KEY")
 
 # ---------- UTILS ----------
-
 def format_time(ts):
     return datetime.fromtimestamp(ts).strftime("%H:%M")
 
@@ -19,7 +23,6 @@ def hpa_to_mm(hpa):
     return round(hpa * 0.75006)
 
 # ---------- WEATHER ----------
-
 def get_weather(city):
     url = "https://api.openweathermap.org/data/2.5/weather"
     params = {
@@ -28,6 +31,7 @@ def get_weather(city):
         "units": "metric",
         "lang": "ru"
     }
+
     r = requests.get(url, params=params, timeout=10)
     r.raise_for_status()
     data = r.json()
@@ -53,18 +57,21 @@ def get_water_temp(lat, lon):
             "units": "metric",
             "exclude": "minutely,hourly,alerts"
         }
+
         r = requests.get(url, params=params, timeout=10)
         r.raise_for_status()
         data = r.json()
-        return round(data["current"].get("water_temp"))
-    except:
+
+        # OpenWeather иногда не возвращает water_temp, используем temp вместо этого
+        return round(data["current"].get("temp"))
+    except Exception:
         return None
 
 # ---------- BITE LOGIC ----------
-
 def bite_rating(temp, pressure, wind, humidity, water_temp, hour):
     score = 0
 
+    # Давление
     if 745 <= pressure <= 755:
         score += 3
     elif 740 <= pressure <= 760:
@@ -72,33 +79,41 @@ def bite_rating(temp, pressure, wind, humidity, water_temp, hour):
     else:
         score -= 1
 
+    # Ветер
     if 1 <= wind <= 4:
         score += 2
     elif wind > 7:
         score -= 2
 
+    # Влажность
     if humidity >= 60:
         score += 1
 
-    if water_temp:
+    # Температура воды
+    if water_temp is not None:
         if 12 <= water_temp <= 22:
             score += 2
         else:
             score -= 1
 
+    # Время суток
     if hour in range(5, 10) or hour in range(18, 22):
         score += 2
 
     return max(1, min(5, score))
 
 # ---------- HANDLER ----------
-
 async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
     city = "Курск"
     if context.args:
         city = " ".join(context.args)
 
-    w = get_weather(city)
+    try:
+        w = get_weather(city)
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка при получении погоды: {e}")
+        return
+
     water = get_water_temp(w["lat"], w["lon"])
     hour = datetime.now().hour
 
@@ -112,7 +127,7 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     text = (
-        f"🎣 Рыбацкая метео-станция\n\n"
+        f"🎣 Кирюхина рыбацкая метео-станция\n\n"
         f"📍 {city}\n"
         f"🕒 Сейчас: {datetime.now().strftime('%H:%M')}\n\n"
         f"🌡 Воздух: {w['temp']}°C\n"
@@ -123,20 +138,19 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🌇 Закат: {format_time(w['sunset'])}\n"
     )
 
-    if water:
+    if water is not None:
         text += f"🌊 Температура воды: {water}°C\n"
-    else:
-        text += "🌊 Температура воды: нет данных\n"
 
-    text += f"\n🐟 Клёв: {'⭐' * rating}"
+    text += f"\n🎯 Оценка клева: {rating}/5"
 
     await update.message.reply_text(text)
 
 # ---------- MAIN ----------
-
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("station", station))
+
+    print("Бот запущен! Отправьте /station в Telegram")
     app.run_polling()
 
 if __name__ == "__main__":
