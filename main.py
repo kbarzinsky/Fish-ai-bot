@@ -17,18 +17,20 @@ def format_time(ts, tz):
     return datetime.fromtimestamp(ts, tz=tz).strftime("%H:%M")
 
 def hpa_to_mm(hpa, city=""):
-    """Конвертация hPa в мм рт. ст. с поправкой на город"""
-    mm = hpa * 0.75006
-
-    # Поправки на город (проверено опытно, чтобы давление ближе к барометру)
-    city_corrections = {
-        "курск": 1.002,
-        "москва": 0.998,
-        # можно добавить другие города
+    """Конвертация давления hPa → мм рт. ст. с поправкой на высоту города"""
+    city_altitude = {
+        "курск": 200,
+        "москва": 156,
+        # добавляй другие города при необходимости
     }
-    factor = city_corrections.get(city.lower(), 1.0)
+    altitude = city_altitude.get(city.lower(), 0)  # в метрах
 
-    return round(mm * factor)
+    # Давление на уровне города: падает ~0.12 hPa на метр
+    hpa_corrected = hpa - (altitude * 0.12)
+
+    # Конвертация в мм рт. ст.
+    mm = hpa_corrected * 0.75006
+    return round(mm)
 
 def get_moon_phase():
     day = datetime.now().day
@@ -38,12 +40,7 @@ def get_moon_phase():
 # ---------- WEATHER ----------
 def get_weather(city):
     url = "https://api.openweathermap.org/data/2.5/weather"
-    params = {
-        "q": city,
-        "appid": OPENWEATHER_KEY,
-        "units": "metric",
-        "lang": "ru"
-    }
+    params = {"q": city, "appid": OPENWEATHER_KEY, "units": "metric", "lang": "ru"}
     r = requests.get(url, params=params, timeout=10)
     r.raise_for_status()
     data = r.json()
@@ -65,13 +62,8 @@ def get_weather(city):
 def get_water_temp(lat, lon):
     try:
         url = "https://api.openweathermap.org/data/2.5/onecall"
-        params = {
-            "lat": lat,
-            "lon": lon,
-            "appid": OPENWEATHER_KEY,
-            "units": "metric",
-            "exclude": "minutely,hourly,alerts"
-        }
+        params = {"lat": lat, "lon": lon, "appid": OPENWEATHER_KEY,
+                  "units": "metric", "exclude": "minutely,hourly,alerts"}
         r = requests.get(url, params=params, timeout=10)
         r.raise_for_status()
         data = r.json()
@@ -82,7 +74,6 @@ def get_water_temp(lat, lon):
 # ---------- BITE LOGIC ----------
 def bite_rating(temp, pressure, wind, humidity, water_temp, hour):
     score = 0
-    # Давление: идеальное около 738 мм
     if 735 <= pressure <= 741:
         score += 3
     elif 732 <= pressure < 735 or 741 < pressure <= 745:
@@ -90,24 +81,20 @@ def bite_rating(temp, pressure, wind, humidity, water_temp, hour):
     else:
         score -= 1
 
-    # Ветер
     if 1 <= wind <= 4:
         score += 2
     elif wind > 7:
         score -= 2
 
-    # Влажность
     if humidity >= 60:
         score += 1
 
-    # Температура воды
     if water_temp is not None:
         if 12 <= water_temp <= 22:
             score += 2
         else:
             score -= 1
 
-    # Время суток
     if hour in range(5, 10) or hour in range(18, 22):
         score += 2
 
@@ -133,9 +120,7 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
     local_now = datetime.utcnow() + tz_offset
     hour = local_now.hour
 
-    rating = bite_rating(
-        w["temp"], w["pressure_mm"], w["wind"], w["humidity"], water, hour
-    )
+    rating = bite_rating(w["temp"], w["pressure_mm"], w["wind"], w["humidity"], water, hour)
 
     sunrise_time = (datetime.utcfromtimestamp(w["sunrise"]) + tz_offset).strftime("%H:%M")
     sunset_time = (datetime.utcfromtimestamp(w["sunset"]) + tz_offset).strftime("%H:%M")
