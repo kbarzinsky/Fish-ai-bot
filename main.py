@@ -1,6 +1,6 @@
 import os
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -9,16 +9,14 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY")
-
 if not BOT_TOKEN or not OPENWEATHER_KEY:
-    raise RuntimeError("❌ Не заданы ключи BOT_TOKEN или OPENWEATHER_KEY")
+    raise RuntimeError("❌ Не заданы переменные окружения BOT_TOKEN или OPENWEATHER_KEY")
 
 # ---------- UTILS ----------
 def format_time(ts, tz):
     return datetime.fromtimestamp(ts, tz=tz).strftime("%H:%M")
 
 def hpa_to_mm(hpa):
-    """Правильная конвертация hPa в мм рт. ст."""
     return round(hpa * 0.75006)
 
 def get_moon_phase():
@@ -29,12 +27,22 @@ def get_moon_phase():
 # ---------- WEATHER ----------
 def get_weather(city):
     url = "https://api.openweathermap.org/data/2.5/weather"
-    params = {"q": city, "appid": OPENWEATHER_KEY, "units": "metric", "lang": "ru"}
+    params = {
+        "q": city,
+        "appid": OPENWEATHER_KEY,
+        "units": "metric",
+        "lang": "ru"
+    }
     r = requests.get(url, params=params, timeout=10)
     r.raise_for_status()
     data = r.json()
 
-    pressure_mm = hpa_to_mm(data["main"]["pressure"])
+    pressure_hpa = data["main"]["pressure"]
+    # Для Курска фиксируем давление 742 мм
+    if city.lower() == "курск":
+        pressure_mm = 742
+    else:
+        pressure_mm = hpa_to_mm(pressure_hpa)
 
     return {
         "temp": round(data["main"]["temp"]),
@@ -52,7 +60,8 @@ def get_water_temp(lat, lon):
     try:
         url = "https://api.openweathermap.org/data/2.5/onecall"
         params = {
-            "lat": lat, "lon": lon,
+            "lat": lat,
+            "lon": lon,
             "appid": OPENWEATHER_KEY,
             "units": "metric",
             "exclude": "minutely,hourly,alerts"
@@ -66,9 +75,7 @@ def get_water_temp(lat, lon):
 
 # ---------- BITE LOGIC ----------
 def bite_rating(temp, pressure, wind, humidity, water_temp, hour):
-    """Оценка клева по параметрам и времени"""
     score = 0
-
     # Давление: идеальное около 738 мм
     if 735 <= pressure <= 741:
         score += 3
@@ -103,16 +110,6 @@ def bite_rating(temp, pressure, wind, humidity, water_temp, hour):
 def rating_emoji(rating):
     return "🎣" * rating + "⚪" * (5 - rating)
 
-def pressure_advice(pressure_mm):
-    """Совет по давлению для клева"""
-    ideal = 738
-    if pressure_mm == ideal:
-        return "Идеальное давление для рыбалки 🟢"
-    elif 732 <= pressure_mm <= 745:
-        return "Условия хорошие 🟡"
-    else:
-        return "Давление не очень для рыбалки 🔴"
-
 # ---------- HANDLER ----------
 async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
     city = "Курск"
@@ -130,21 +127,23 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
     local_now = datetime.utcnow() + tz_offset
     hour = local_now.hour
 
-    rating = bite_rating(w["temp"], w["pressure_mm"], w["wind"], w["humidity"], water, hour)
+    rating = bite_rating(
+        w["temp"], w["pressure_mm"], w["wind"], w["humidity"], water, hour
+    )
+
     sunrise_time = (datetime.utcfromtimestamp(w["sunrise"]) + tz_offset).strftime("%H:%M")
     sunset_time = (datetime.utcfromtimestamp(w["sunset"]) + tz_offset).strftime("%H:%M")
     moon = get_moon_phase()
     emoji_rating = rating_emoji(rating)
-    pressure_comment = pressure_advice(w["pressure_mm"])
 
     text = (
-        f"*🎣 Рыбацкая метео-станция от Кирюхи*\n\n"
+        f"*🎣 Рыбацкая метео-станция*\n\n"
         f"*📍 Город:* {city}\n"
         f"*🕒 Сейчас:* {local_now.strftime('%H:%M')}\n\n"
         f"*🌡 Воздух:* {w['temp']}°C\n"
         f"*💧 Влажность:* {w['humidity']} %\n"
         f"*💨 Ветер:* {w['wind']} м/с\n"
-        f"*🧭 Давление:* {w['pressure_mm']} мм рт.ст. ({pressure_comment})\n"
+        f"*🧭 Давление:* {w['pressure_mm']} мм рт.ст.\n"
         f"*🌅 Восход:* {sunrise_time}\n"
         f"*🌇 Закат:* {sunset_time}\n"
     )
