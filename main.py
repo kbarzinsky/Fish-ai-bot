@@ -18,7 +18,7 @@ def hpa_to_mm(hpa, city=""):
     city_altitude = {
         "курск": 200,
         "москва": 156,
-        # добавляй другие города при необходимости
+        # добавляй другие города
     }
     altitude = city_altitude.get(city.lower(), 0)
     hpa_corrected = hpa - (altitude * 0.12)
@@ -39,60 +39,6 @@ def pressure_comment(pressure_mm):
     else:
         return "⚠ Слишком высокое"
 
-# ---------- WEATHER ----------
-def get_weather(city):
-    url = "https://api.openweathermap.org/data/2.5/weather"
-    params = {"q": city, "appid": OPENWEATHER_KEY, "units": "metric", "lang": "ru"}
-    r = requests.get(url, params=params, timeout=10)
-    r.raise_for_status()
-    data = r.json()
-
-    pressure_mm = hpa_to_mm(data["main"]["pressure"], city)
-
-    return {
-        "temp": round(data["main"]["temp"]),
-        "humidity": data["main"]["humidity"],
-        "wind": round(data["wind"]["speed"], 1),
-        "pressure_mm": pressure_mm,
-        "sunrise": data["sys"]["sunrise"],
-        "sunset": data["sys"]["sunset"],
-        "lat": data["coord"]["lat"],
-        "lon": data["coord"]["lon"],
-        "timezone_offset": data.get("timezone", 0)
-    }
-
-def get_water_temp(lat, lon):
-    try:
-        url = "https://api.openweathermap.org/data/2.5/onecall"
-        params = {"lat": lat, "lon": lon, "appid": OPENWEATHER_KEY,
-                  "units": "metric", "exclude": "minutely,hourly,alerts"}
-        r = requests.get(url, params=params, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        return round(data["current"].get("temp"))
-    except Exception:
-        return None
-
-def get_week_forecast(lat, lon, tz_offset):
-    try:
-        url = "https://api.openweathermap.org/data/2.5/onecall"
-        params = {"lat": lat, "lon": lon, "appid": OPENWEATHER_KEY,
-                  "units": "metric", "exclude": "minutely,hourly,alerts"}
-        r = requests.get(url, params=params, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        forecast_text = ""
-        for day in data["daily"]:
-            date = datetime.utcfromtimestamp(day["dt"]) + tz_offset
-            temp_day = round(day["temp"]["day"])
-            temp_night = round(day["temp"]["night"])
-            pressure_mm = hpa_to_mm(day["pressure"])
-            forecast_text += f"{date.strftime('%a %d.%m')} — день {temp_day}°C, ночь {temp_night}°C, давление {pressure_mm} мм рт.ст.\n"
-        return forecast_text
-    except Exception:
-        return "Не удалось получить недельный прогноз."
-
-# ---------- BITE LOGIC ----------
 def bite_rating(temp, pressure, wind, humidity, water_temp, hour):
     score = 0
     if 735 <= pressure <= 741:
@@ -119,6 +65,76 @@ def bite_rating(temp, pressure, wind, humidity, water_temp, hour):
 def rating_emoji(rating):
     return "🎣" * rating + "⚪" * (5 - rating)
 
+# ---------- WEATHER ----------
+def get_weather(city):
+    url = "https://api.openweathermap.org/data/2.5/weather"
+    params = {"q": city, "appid": OPENWEATHER_KEY, "units": "metric", "lang": "ru"}
+    r = requests.get(url, params=params, timeout=10)
+    r.raise_for_status()
+    data = r.json()
+    pressure_mm = hpa_to_mm(data["main"]["pressure"], city)
+    return {
+        "temp": round(data["main"]["temp"]),
+        "humidity": data["main"]["humidity"],
+        "wind": round(data["wind"]["speed"], 1),
+        "pressure_mm": pressure_mm,
+        "sunrise": data["sys"]["sunrise"],
+        "sunset": data["sys"]["sunset"],
+        "lat": data["coord"]["lat"],
+        "lon": data["coord"]["lon"],
+        "timezone_offset": data.get("timezone", 0)
+    }
+
+def get_water_temp(lat, lon):
+    try:
+        url = "https://api.openweathermap.org/data/2.5/onecall"
+        params = {"lat": lat, "lon": lon, "appid": OPENWEATHER_KEY,
+                  "units": "metric", "exclude": "minutely,hourly,alerts"}
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        return round(data["current"].get("temp"))
+    except Exception:
+        return None
+
+# ---------- WEEK FORECAST (Free API) ----------
+def get_week_forecast_free(city):
+    try:
+        url = "https://api.openweathermap.org/data/2.5/forecast"
+        params = {"q": city, "appid": OPENWEATHER_KEY, "units": "metric", "lang": "ru"}
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        if "list" not in data:
+            return "❌ Прогноз недоступен. Проверьте город или API ключ."
+
+        # группируем по дням
+        days = {}
+        for item in data["list"]:
+            dt = datetime.utcfromtimestamp(item["dt"]) + timedelta(seconds=data["city"]["timezone"])
+            day_key = dt.date()
+            if day_key not in days:
+                days[day_key] = {"temp": [], "pressure": [], "humidity": [], "wind": []}
+            days[day_key]["temp"].append(item["main"]["temp"])
+            days[day_key]["pressure"].append(item["main"]["pressure"])
+            days[day_key]["humidity"].append(item["main"]["humidity"])
+            days[day_key]["wind"].append(item["wind"]["speed"])
+
+        forecast_text = ""
+        for day, values in days.items():
+            temp_avg = round(sum(values["temp"]) / len(values["temp"]))
+            pressure_avg = round(hpa_to_mm(sum(values["pressure"]) / len(values["pressure"]), city))
+            humidity_avg = round(sum(values["humidity"]) / len(values["humidity"]))
+            wind_avg = round(sum(values["wind"]) / len(values["wind"]), 1)
+            # рейтинг клева по среднему
+            rating = bite_rating(temp_avg, pressure_avg, wind_avg, humidity_avg, None, 9)
+            emoji = rating_emoji(rating)
+            forecast_text += f"{day.strftime('%a %d.%m')} — {temp_avg}°C, давление {pressure_avg} мм рт.ст., клев {rating}/5 {emoji}\n"
+
+        return forecast_text
+    except Exception as e:
+        return f"❌ Не удалось получить прогноз: {e}"
+
 # ---------- HANDLERS ----------
 async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
     city = "Курск"
@@ -137,7 +153,7 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
     hour = local_now.hour
 
     rating = bite_rating(w["temp"], w["pressure_mm"], w["wind"], w["humidity"], water, hour)
-    emoji_rating = rating_emoji(rating)
+    emoji_rating_val = rating_emoji(rating)
     sunrise_time = (datetime.utcfromtimestamp(w["sunrise"]) + tz_offset).strftime("%H:%M")
     sunset_time = (datetime.utcfromtimestamp(w["sunset"]) + tz_offset).strftime("%H:%M")
     moon = get_moon_phase()
@@ -158,7 +174,7 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"*🌊 Температура воды:* {water}°C\n"
 
     text += f"\n*🌙 Луна:* {moon}\n"
-    text += f"*🎯 Клев:* {rating}/5 {emoji_rating}"
+    text += f"*🎯 Клев:* {rating}/5 {emoji_rating_val}"
 
     await update.message.reply_text(text, parse_mode="Markdown")
 
@@ -167,14 +183,7 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         city = " ".join(context.args)
 
-    try:
-        w = get_weather(city)
-    except Exception as e:
-        await update.message.reply_text(f"Ошибка при получении прогноза для {city}: {e}")
-        return
-
-    tz_offset = timedelta(seconds=w["timezone_offset"])
-    forecast_text = get_week_forecast(w["lat"], w["lon"], tz_offset)
+    forecast_text = get_week_forecast_free(city)
     await update.message.reply_text(f"*Прогноз на неделю для {city}:*\n\n{forecast_text}", parse_mode="Markdown")
 
 # ---------- MAIN ----------
