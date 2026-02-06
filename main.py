@@ -1,13 +1,13 @@
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ---------- LOAD ENV ----------
-load_dotenv()  # Загружаем .env из корня проекта
+load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY")
@@ -16,11 +16,17 @@ if not BOT_TOKEN or not OPENWEATHER_KEY:
     raise RuntimeError("❌ Не заданы переменные окружения BOT_TOKEN или OPENWEATHER_KEY")
 
 # ---------- UTILS ----------
-def format_time(ts):
-    return datetime.fromtimestamp(ts).strftime("%H:%M")
+def format_time(ts, tz):
+    return datetime.fromtimestamp(ts, tz=tz).strftime("%H:%M")
 
 def hpa_to_mm(hpa):
     return round(hpa * 0.75006)
+
+def get_moon_phase():
+    """Возвращает эмоджи фазы Луны"""
+    day = datetime.now().day
+    phases = ["🌑","🌒","🌓","🌔","🌕","🌖","🌗","🌘"]
+    return phases[(day * 8 // 30) % 8]
 
 # ---------- WEATHER ----------
 def get_weather(city):
@@ -61,8 +67,6 @@ def get_water_temp(lat, lon):
         r = requests.get(url, params=params, timeout=10)
         r.raise_for_status()
         data = r.json()
-
-        # OpenWeather иногда не возвращает water_temp, используем temp вместо этого
         return round(data["current"].get("temp"))
     except Exception:
         return None
@@ -71,7 +75,6 @@ def get_water_temp(lat, lon):
 def bite_rating(temp, pressure, wind, humidity, water_temp, hour):
     score = 0
 
-    # Давление
     if 745 <= pressure <= 755:
         score += 3
     elif 740 <= pressure <= 760:
@@ -79,28 +82,27 @@ def bite_rating(temp, pressure, wind, humidity, water_temp, hour):
     else:
         score -= 1
 
-    # Ветер
     if 1 <= wind <= 4:
         score += 2
     elif wind > 7:
         score -= 2
 
-    # Влажность
     if humidity >= 60:
         score += 1
 
-    # Температура воды
     if water_temp is not None:
         if 12 <= water_temp <= 22:
             score += 2
         else:
             score -= 1
 
-    # Время суток
     if hour in range(5, 10) or hour in range(18, 22):
         score += 2
 
     return max(1, min(5, score))
+
+def rating_emoji(rating):
+    return "🎣" * rating + "⚪" * (5 - rating)
 
 # ---------- HANDLER ----------
 async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -116,34 +118,35 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     water = get_water_temp(w["lat"], w["lon"])
     hour = datetime.now().hour
-
     rating = bite_rating(
-        w["temp"],
-        w["pressure_mm"],
-        w["wind"],
-        w["humidity"],
-        water,
-        hour
+        w["temp"], w["pressure_mm"], w["wind"], w["humidity"], water, hour
     )
 
+    tz_kursk = timezone(timedelta(hours=3))
+    sunrise_time = format_time(w['sunrise'], tz_kursk)
+    sunset_time = format_time(w['sunset'], tz_kursk)
+    moon = get_moon_phase()
+    emoji_rating = rating_emoji(rating)
+
     text = (
-        f"🎣 Кирюхина рыбацкая метео-станция\n\n"
-        f"📍 {city}\n"
-        f"🕒 Сейчас: {datetime.now().strftime('%H:%M')}\n\n"
-        f"🌡 Воздух: {w['temp']}°C\n"
-        f"💧 Влажность: {w['humidity']}%\n"
-        f"💨 Ветер: {w['wind']} м/с\n"
-        f"🧭 Давление: {w['pressure_mm']} мм рт.ст.\n"
-        f"🌅 Восход: {format_time(w['sunrise'])}\n"
-        f"🌇 Закат: {format_time(w['sunset'])}\n"
+        f"*🎣 Рыбацкая метео-станция*\n\n"
+        f"*📍 Город:* {city}\n"
+        f"*🕒 Сейчас:* {datetime.now(tz=tz_kursk).strftime('%H:%M')}\n\n"
+        f"*🌡 Воздух:* {w['temp']}°C\n"
+        f"*💧 Влажность:* {w['humidity']} %\n"
+        f"*💨 Ветер:* {w['wind']} м/с\n"
+        f"*🧭 Давление:* {w['pressure_mm']} мм рт.ст.\n"
+        f"*🌅 Восход:* {sunrise_time}\n"
+        f"*🌇 Закат:* {sunset_time}\n"
     )
 
     if water is not None:
-        text += f"🌊 Температура воды: {water}°C\n"
+        text += f"*🌊 Температура воды:* {water}°C\n"
 
-    text += f"\n🎯 Оценка клева: {rating}/5"
+    text += f"\n*🌙 Луна:* {moon}\n"
+    text += f"*🎯 Клев:* {rating}/5 {emoji_rating}"
 
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 # ---------- MAIN ----------
 def main():
