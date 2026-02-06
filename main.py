@@ -18,7 +18,6 @@ def hpa_to_mm(hpa, city=""):
     city_altitude = {
         "курск": 200,
         "москва": 156,
-        # добавляй другие города
     }
     altitude = city_altitude.get(city.lower(), 0)
     hpa_corrected = hpa - (altitude * 0.12)
@@ -97,8 +96,8 @@ def get_water_temp(lat, lon):
     except Exception:
         return None
 
-# ---------- WEEK FORECAST (Free API) ----------
-def get_week_forecast_free(city):
+# ---------- WEEK FORECAST ----------
+def get_week_forecast_full(city):
     try:
         url = "https://api.openweathermap.org/data/2.5/forecast"
         params = {"q": city, "appid": OPENWEATHER_KEY, "units": "metric", "lang": "ru"}
@@ -108,30 +107,78 @@ def get_week_forecast_free(city):
         if "list" not in data:
             return "❌ Прогноз недоступен. Проверьте город или API ключ."
 
-        # группируем по дням
+        lat = data["city"]["coord"]["lat"]
+        lon = data["city"]["coord"]["lon"]
+        tz_offset = timedelta(seconds=data["city"]["timezone"])
+        moon = get_moon_phase()
+
+        # Получаем sunrise/sunset для каждого дня через onecall
+        url_onecall = "https://api.openweathermap.org/data/2.5/onecall"
+        params_onecall = {
+            "lat": lat, "lon": lon,
+            "appid": OPENWEATHER_KEY,
+            "units": "metric",
+            "exclude": "minutely,hourly,alerts,current"
+        }
+        r2 = requests.get(url_onecall, params=params_onecall, timeout=10)
+        r2.raise_for_status()
+        daily_data = r2.json().get("daily", [])
+
         days = {}
         for item in data["list"]:
-            dt = datetime.utcfromtimestamp(item["dt"]) + timedelta(seconds=data["city"]["timezone"])
+            dt = datetime.utcfromtimestamp(item["dt"]) + tz_offset
             day_key = dt.date()
             if day_key not in days:
-                days[day_key] = {"temp": [], "pressure": [], "humidity": [], "wind": []}
-            days[day_key]["temp"].append(item["main"]["temp"])
+                days[day_key] = {"temp_day": [], "temp_night": [], "pressure": [], "humidity": [], "wind": []}
+
+            hour = dt.hour
+            if 6 <= hour <= 18:
+                days[day_key]["temp_day"].append(item["main"]["temp"])
+            else:
+                days[day_key]["temp_night"].append(item["main"]["temp"])
+
             days[day_key]["pressure"].append(item["main"]["pressure"])
             days[day_key]["humidity"].append(item["main"]["humidity"])
             days[day_key]["wind"].append(item["wind"]["speed"])
 
         forecast_text = ""
+        count = 0
         for day, values in days.items():
-            temp_avg = round(sum(values["temp"]) / len(values["temp"]))
+            if count >= 5:
+                break
+            count += 1
+            temp_day = round(sum(values["temp_day"]) / len(values["temp_day"])) if values["temp_day"] else None
+            temp_night = round(sum(values["temp_night"]) / len(values["temp_night"])) if values["temp_night"] else None
             pressure_avg = round(hpa_to_mm(sum(values["pressure"]) / len(values["pressure"]), city))
             humidity_avg = round(sum(values["humidity"]) / len(values["humidity"]))
             wind_avg = round(sum(values["wind"]) / len(values["wind"]), 1)
-            # рейтинг клева по среднему
-            rating = bite_rating(temp_avg, pressure_avg, wind_avg, humidity_avg, None, 9)
+            water_temp = get_water_temp(lat, lon)
+            rating = bite_rating(temp_day, pressure_avg, wind_avg, humidity_avg, water_temp, 9)
             emoji = rating_emoji(rating)
-            forecast_text += f"{day.strftime('%a %d.%m')} — {temp_avg}°C, давление {pressure_avg} мм рт.ст., клев {rating}/5 {emoji}\n"
+
+            # Sunrise/sunset для этого дня
+            sunrise_time = sunset_time = "—"
+            if len(daily_data) >= count:
+                sunrise_time = datetime.utcfromtimestamp(daily_data[count-1]["sunrise"]) + tz_offset
+                sunset_time = datetime.utcfromtimestamp(daily_data[count-1]["sunset"]) + tz_offset
+                sunrise_time = sunrise_time.strftime("%H:%M")
+                sunset_time = sunset_time.strftime("%H:%M")
+
+            forecast_text += (
+                f"*📅 {day.strftime('%a %d.%m')}*\n"
+                f"🌡 День: {temp_day}°C, Ночь: {temp_night}°C\n"
+                f"💧 Влажность: {humidity_avg}%\n"
+                f"💨 Ветер: {wind_avg} м/с\n"
+                f"🧭 Давление: {pressure_avg} мм рт.ст. ({pressure_comment(pressure_avg)})\n"
+            )
+            if water_temp is not None:
+                forecast_text += f"🌊 Температура воды: {water_temp}°C\n"
+            forecast_text += f"🌅 Восход: {sunrise_time}, 🌇 Закат: {sunset_time}\n"
+            forecast_text += f"🌙 Луна: {moon}\n"
+            forecast_text += f"🎯 Клев: {rating}/5 {emoji}\n\n"
 
         return forecast_text
+
     except Exception as e:
         return f"❌ Не удалось получить прогноз: {e}"
 
@@ -183,8 +230,8 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         city = " ".join(context.args)
 
-    forecast_text = get_week_forecast_free(city)
-    await update.message.reply_text(f"*Прогноз на неделю для {city}:*\n\n{forecast_text}", parse_mode="Markdown")
+    forecast_text = get_week_forecast_full(city)
+    await update.message.reply_text(f"*Прогноз на 5 дней для {city}:*\n\n{forecast_text}", parse_mode="Markdown")
 
 # ---------- MAIN ----------
 def main():
