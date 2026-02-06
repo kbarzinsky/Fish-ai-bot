@@ -7,7 +7,6 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ---------- LOAD ENV ----------
-
 load_dotenv()  # Загружаем .env из корня проекта
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -17,7 +16,6 @@ if not BOT_TOKEN or not OPENWEATHER_KEY:
     raise RuntimeError("❌ Не заданы переменные окружения BOT_TOKEN или OPENWEATHER_KEY")
 
 # ---------- UTILS ----------
-
 def format_time(ts):
     return datetime.fromtimestamp(ts).strftime("%H:%M")
 
@@ -25,7 +23,6 @@ def hpa_to_mm(hpa):
     return round(hpa * 0.75006)
 
 # ---------- WEATHER ----------
-
 def get_weather(city):
     url = "https://api.openweathermap.org/data/2.5/weather"
     params = {
@@ -65,12 +62,12 @@ def get_water_temp(lat, lon):
         r.raise_for_status()
         data = r.json()
 
-        return round(data["current"].get("water_temp"))
+        # OpenWeather иногда не возвращает water_temp, используем temp вместо этого
+        return round(data["current"].get("temp"))
     except Exception:
         return None
 
 # ---------- BITE LOGIC ----------
-
 def bite_rating(temp, pressure, wind, humidity, water_temp, hour):
     score = 0
 
@@ -106,13 +103,17 @@ def bite_rating(temp, pressure, wind, humidity, water_temp, hour):
     return max(1, min(5, score))
 
 # ---------- HANDLER ----------
-
 async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
     city = "Курск"
     if context.args:
         city = " ".join(context.args)
 
-    w = get_weather(city)
+    try:
+        w = get_weather(city)
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка при получении погоды: {e}")
+        return
+
     water = get_water_temp(w["lat"], w["lon"])
     hour = datetime.now().hour
 
@@ -139,5 +140,19 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if water is not None:
         text += f"🌊 Температура воды: {water}°C\n"
-    els
+
+    text += f"\n🎯 Оценка клева: {rating}/5"
+
+    await update.message.reply_text(text)
+
+# ---------- MAIN ----------
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("station", station))
+
+    print("Бот запущен! Отправьте /station в Telegram")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
     
