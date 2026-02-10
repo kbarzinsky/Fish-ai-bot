@@ -223,7 +223,7 @@ def main():
     app.add_handler(CommandHandler("station", station))
     app.add_handler(CommandHandler("week", week))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, buttons))
-    print("🚀 Бот запущен")
+    print("🚀 Бот Кирилла запущен")
     app.run_polling()
 
 if __name__ == "__main__":
