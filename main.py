@@ -14,8 +14,10 @@ if not BOT_TOKEN or not OPENWEATHER_KEY:
 
 # ---------- UTILS ----------
 def hpa_to_mm(hpa, city=""):
-    """Конвертация давления hPa → мм рт. ст. с поправкой на высоту города"""
-    city_altitude = {"курск": 200, "москва": 156}
+    city_altitude = {
+        "курск": 200,
+        "москва": 156,
+    }
     altitude = city_altitude.get(city.lower(), 0)
     hpa_corrected = hpa - (altitude * 0.12)
     return round(hpa_corrected * 0.75006)
@@ -61,27 +63,30 @@ def bite_rating(temp, pressure, wind, humidity, water_temp, hour):
 def rating_emoji(rating):
     return "🎣" * rating + "⚪" * (5 - rating)
 
-def weather_emoji(main):
-    return {
+def weather_emoji(weather_main):
+    mapping = {
         "Clear": "☀️",
         "Clouds": "☁️",
-        "Rain": "🌧",
-        "Drizzle": "🌦",
+        "Rain": "💦",
+        "Drizzle": "💧",
         "Thunderstorm": "⛈",
         "Snow": "❄️",
         "Mist": "🌫",
         "Fog": "🌫",
         "Haze": "🌫"
-    }.get(main, "🌈")
+    }
+    return mapping.get(weather_main, "🌡")
 
 def get_precipitation(weather_dict):
     main = weather_dict.get("weather_main", "")
+    pop = weather_dict.get("pop", 0)
+    pop_percent = int(pop * 100)
     if main in ["Rain", "Drizzle", "Thunderstorm"]:
-        return "💦 Дождь"
+        return f"Дождь {pop_percent}%"
     elif main == "Snow":
-        return "❄️ Снег"
+        return f"Снег {pop_percent}%"
     else:
-        return "☀️ Без осадков"
+        return "Без осадков"
 
 # ---------- WEATHER ----------
 def get_weather(city):
@@ -90,7 +95,9 @@ def get_weather(city):
     r = requests.get(url, params=params, timeout=10)
     r.raise_for_status()
     data = r.json()
+    weather_main = data["weather"][0]["main"]
     pressure_mm = hpa_to_mm(data["main"]["pressure"], city)
+    pop = data.get("pop", 0)  # вероятность осадков
     return {
         "temp": round(data["main"]["temp"]),
         "humidity": data["main"]["humidity"],
@@ -101,7 +108,8 @@ def get_weather(city):
         "lat": data["coord"]["lat"],
         "lon": data["coord"]["lon"],
         "timezone_offset": data.get("timezone", 0),
-        "weather_main": data["weather"][0]["main"]
+        "weather_main": weather_main,
+        "pop": pop
     }
 
 # ---------- WEEK FORECAST ----------
@@ -115,8 +123,6 @@ def get_week_forecast_full(city):
         if "list" not in data:
             return "❌ Прогноз недоступен. Проверьте город или API ключ."
 
-        lat = data["city"]["coord"]["lat"]
-        lon = data["city"]["coord"]["lon"]
         tz_offset = timedelta(seconds=data["city"]["timezone"])
         moon = get_moon_phase()
         weekdays_ru = ["Пн","Вт","Ср","Чт","Пт","Сб","Вс"]
@@ -126,7 +132,7 @@ def get_week_forecast_full(city):
             dt = datetime.utcfromtimestamp(item["dt"]) + tz_offset
             day_key = dt.date()
             if day_key not in days:
-                days[day_key] = {"temp_day": [], "temp_night": [], "pressure": [], "humidity": [], "wind": [], "weather": []}
+                days[day_key] = {"temp_day": [], "temp_night": [], "pressure": [], "humidity": [], "wind": [], "weather": [], "pop": []}
 
             hour = dt.hour
             if 6 <= hour <= 18:
@@ -138,6 +144,7 @@ def get_week_forecast_full(city):
             days[day_key]["humidity"].append(item["main"]["humidity"])
             days[day_key]["wind"].append(item["wind"]["speed"])
             days[day_key]["weather"].append(item["weather"][0]["main"])
+            days[day_key]["pop"].append(item.get("pop", 0))
 
         forecast_text = ""
         count = 0
@@ -153,6 +160,8 @@ def get_week_forecast_full(city):
             wind_avg = round(sum(values["wind"]) / len(values["wind"]), 1)
 
             main_weather = max(set(values["weather"]), key=values["weather"].count)
+            pop_avg = sum(values["pop"]) / len(values["pop"]) if values["pop"] else 0
+
             weather_main_ru = {
                 "Clear": "Ясно",
                 "Clouds": "Облачно",
@@ -168,10 +177,10 @@ def get_week_forecast_full(city):
                 "Haze": "Мгла"
             }.get(main_weather, main_weather)
 
-            precip = get_precipitation({"weather_main": main_weather})
+            precip = get_precipitation({"weather_main": main_weather, "pop": pop_avg})
             weather_text = f"{weather_emoji(main_weather)} {weather_main_ru}"
-            if precip != "☀️ Без осадков":
-                weather_text += f", {precip.replace('💦 ', '')}"
+            if "Без осадков" not in precip:
+                weather_text += f", {precip.split()[1]} {precip.split()[2]}%"
 
             rating = bite_rating(temp_day, pressure_avg, wind_avg, humidity_avg, None, 9)
             emoji = rating_emoji(rating)
@@ -227,10 +236,10 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Haze": "Мгла"
     }.get(w["weather_main"], w["weather_main"])
 
-    precip = get_precipitation({"weather_main": w["weather_main"]})
+    precip = get_precipitation({"weather_main": w["weather_main"], "pop": w.get("pop",0)})
     weather_text = f"{weather_emoji(w['weather_main'])} {weather_main_ru}"
-    if precip != "☀️ Без осадков":
-        weather_text += f", {precip.replace('💦 ', '')}"
+    if "Без осадков" not in precip:
+        weather_text += f", {precip.split()[1]} {precip.split()[2]}%"
 
     text = (
         f"*🎣 Рыбацкая метео-станция от Кирюхи*\n\n"
@@ -266,5 +275,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-            
     
