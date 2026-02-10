@@ -9,11 +9,13 @@ from telegram.ext import Application, CommandHandler, MessageHandler, ContextTyp
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY")
+
 if not BOT_TOKEN or not OPENWEATHER_KEY:
     raise RuntimeError("❌ Не заданы BOT_TOKEN или OPENWEATHER_KEY")
 
 # ---------- CONSTANTS ----------
 WEEKDAYS_RU = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+
 KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("📍 Текущий прогноз")],
@@ -24,40 +26,61 @@ KEYBOARD = ReplyKeyboardMarkup(
 
 # ---------- UTILS ----------
 def hpa_to_mm(hpa, city=""):
-    city_altitude = {"курск": 200, "москва": 156}
+    """Перевод давления из hPa в мм рт.ст. с учётом высоты города над уровнем моря"""
+    city_altitude = {"курск": 200, "москва": 156, "мурманск": 0}
     altitude = city_altitude.get(city.lower(), 0)
     return round((hpa - altitude * 0.12) * 0.75006)
 
 def moon_phase():
+    """Текущая фаза луны с иконкой"""
     known_new_moon = datetime(2000, 1, 6, tzinfo=timezone.utc)
     days = (datetime.now(timezone.utc) - known_new_moon).days
     phase = days % 29.53
-    if phase < 1.8: return "🌑 Новолуние"
-    elif phase < 5.5: return "🌒 Растущая"
-    elif phase < 9.2: return "🌓 Первая четверть"
-    elif phase < 12.9: return "🌔 Растущая"
-    elif phase < 16.6: return "🌕 Полнолуние"
-    elif phase < 20.3: return "🌖 Убывающая"
-    elif phase < 24.0: return "🌗 Последняя четверть"
-    else: return "🌘 Убывающая"
+    if phase < 1.8:
+        return "🌑 Новолуние"
+    elif phase < 5.5:
+        return "🌒 Растущая"
+    elif phase < 9.2:
+        return "🌓 Первая четверть"
+    elif phase < 12.9:
+        return "🌔 Растущая"
+    elif phase < 16.6:
+        return "🌕 Полнолуние"
+    elif phase < 20.3:
+        return "🌖 Убывающая"
+    elif phase < 24.0:
+        return "🌗 Последняя четверть"
+    else:
+        return "🌘 Убывающая"
 
 def pressure_comment(mm):
-    if 735 <= mm <= 741: return "🌟 Отличное"
-    elif mm < 735: return "⚠ Низкое"
-    elif mm <= 750: return "⚠ Высоковатое"
+    """Комментарий по давлению"""
+    if 735 <= mm <= 741:
+        return "🌟 Отличное"
+    elif mm < 735:
+        return "⚠ Низкое"
+    elif mm <= 750:
+        return "⚠ Высоковатое"
     return "❌ Очень высокое"
 
 def bite_rating(temp, pressure, wind, humidity, hour):
+    """Примерный рейтинг клёва 1-5"""
     score = 0
-    if 735 <= pressure <= 741: score += 3
-    if 1 <= wind <= 4: score += 2
-    if humidity >= 60: score += 1
-    if hour in range(5, 10) or hour in range(18, 22): score += 2
+    if 735 <= pressure <= 741:
+        score += 3
+    if 1 <= wind <= 4:
+        score += 2
+    if humidity >= 60:
+        score += 1
+    if hour in range(5, 10) or hour in range(18, 22):
+        score += 2
     return max(1, min(5, score))
 
-def rating_emoji(r): return "🎣" * r + "⚪" * (5 - r)
+def rating_emoji(r):
+    return "🎣" * r + "⚪" * (5 - r)
 
-def weather_text(main, rain, snow):
+def weather_text(main, rain_pct, snow_pct):
+    """Текстовое описание погоды с % осадков"""
     base = {
         "clear": "☀️ Ясно",
         "clouds": "☁️ Облачно",
@@ -67,42 +90,39 @@ def weather_text(main, rain, snow):
         "thunderstorm": "⛈ Гроза",
         "mist": "🌫 Туман",
     }.get(main, "🌈 Погода")
-    if rain > 0: return f"🌧 Дождь {rain}%"
-    if snow > 0: return f"❄️ Снег {snow}%"
+
+    if rain_pct > 0:
+        return f"🌧 Дождь {rain_pct}%"
+    if snow_pct > 0:
+        return f"❄️ Снег {snow_pct}%"
     return base
 
 # ---------- WEATHER ----------
 def get_weather(city):
-    if "," not in city: city = f"{city},RU"
-    try:
-        r = requests.get(
-            "https://api.openweathermap.org/data/2.5/weather",
-            params={"q": city, "appid": OPENWEATHER_KEY, "units": "metric", "lang": "ru"},
-            timeout=10
-        )
-        r.raise_for_status()
-        d = r.json()
-        rain_pct = min(int(d.get("rain", {}).get("1h", 0) * 10), 100)
-        snow_pct = min(int(d.get("snow", {}).get("1h", 0) * 10), 100)
-        return {
-            "temp": round(d["main"]["temp"]),
-            "humidity": d["main"]["humidity"],
-            "wind": round(d["wind"]["speed"], 1),
-            "pressure": hpa_to_mm(d["main"]["pressure"], city),
-            "weather": d["weather"][0]["main"].lower(),
-            "rain": rain_pct,
-            "snow": snow_pct,
-            "sunrise": d["sys"]["sunrise"],
-            "sunset": d["sys"]["sunset"],
-            "tz": d["timezone"]
-        }
-    except requests.HTTPError as e:
-        if e.response.status_code == 404:
-            raise RuntimeError(f"❌ Город '{city}' не найден")
-        elif e.response.status_code == 401:
-            raise RuntimeError("❌ Неверный API ключ OpenWeather")
-        else:
-            raise e
+    """Получение текущей погоды"""
+    r = requests.get(
+        "https://api.openweathermap.org/data/2.5/weather",
+        params={"q": city, "appid": OPENWEATHER_KEY, "units": "metric", "lang": "ru"},
+        timeout=10
+    )
+    r.raise_for_status()
+    d = r.json()
+
+    rain_pct = min(int(d.get("rain", {}).get("1h", 0) * 10), 100)
+    snow_pct = min(int(d.get("snow", {}).get("1h", 0) * 10), 100)
+
+    return {
+        "temp": round(d["main"]["temp"]),
+        "humidity": d["main"]["humidity"],
+        "wind": round(d["wind"]["speed"], 1),
+        "pressure": hpa_to_mm(d["main"]["pressure"], city.split(",")[0]),
+        "weather": d["weather"][0]["main"].lower(),
+        "rain": rain_pct,
+        "snow": snow_pct,
+        "sunrise": d["sys"]["sunrise"],
+        "sunset": d["sys"]["sunset"],
+        "tz": d["timezone"]
+    }
 
 # ---------- HANDLERS ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -113,13 +133,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
     city = "Курск"
-    if context.args: city = " ".join(context.args)
-    try:
-        w = get_weather(city)
-    except Exception as e:
-        await update.message.reply_text(str(e))
-        return
+    if context.args:
+        city = " ".join(context.args)
 
+    w = get_weather(city)
     tz = timezone(timedelta(seconds=w["tz"]))
     now = datetime.now(tz)
     weekday = WEEKDAYS_RU[now.weekday()]
@@ -144,20 +161,18 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     city = "Курск"
-    if context.args: city = " ".join(context.args)
-    try:
-        r = requests.get(
-            "https://api.openweathermap.org/data/2.5/forecast",
-            params={"q": city if ',' in city else f"{city},RU", "appid": OPENWEATHER_KEY, "units": "metric", "lang": "ru"},
-            timeout=10
-        )
-        r.raise_for_status()
-        data = r.json()
-    except Exception as e:
-        await update.message.reply_text(str(e))
-        return
+    if context.args:
+        city = " ".join(context.args)
 
+    r = requests.get(
+        "https://api.openweathermap.org/data/2.5/forecast",
+        params={"q": city, "appid": OPENWEATHER_KEY, "units": "metric", "lang": "ru"},
+        timeout=10
+    )
+    r.raise_for_status()
+    data = r.json()
     tz = timezone(timedelta(seconds=data["city"]["timezone"]))
+
     days = {}
     for item in data["list"]:
         dt = datetime.fromtimestamp(item["dt"], tz)
@@ -168,27 +183,32 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         days[d]["humidity"].append(item["main"]["humidity"])
         days[d]["wind"].append(item["wind"]["speed"])
         days[d]["weather"].append(item["weather"][0]["main"].lower())
-        days[d]["rain"].append(min(int(item.get("rain", {}).get("1h", 0) * 10), 100))
-        days[d]["snow"].append(min(int(item.get("snow", {}).get("1h", 0) * 10), 100))
+        rain_pct = min(int(item.get("rain", {}).get("1h", 0) * 10), 100)
+        snow_pct = min(int(item.get("snow", {}).get("1h", 0) * 10), 100)
+        days[d]["rain"].append(rain_pct)
+        days[d]["snow"].append(snow_pct)
 
     out = f"📅 *Прогноз на 5 дней для {city}:*\n\n"
     for day, v in list(days.items())[:5]:
         weekday = WEEKDAYS_RU[day.weekday()]
         temp_day = round(sum(v["day"]) / len(v["day"])) if v["day"] else 0
         temp_night = round(sum(v["night"]) / len(v["night"])) if v["night"] else 0
-        pressure = hpa_to_mm(sum(v["pressure"]) / len(v["pressure"]), city)
-        wind = round(sum(v["wind"]) / len(v["wind"]), 1)
-        humidity = round(sum(v["humidity"]) / len(v["humidity"]))
+        pressure_avg = hpa_to_mm(sum(v["pressure"]) / len(v["pressure"]), city.split(",")[0])
+        humidity_avg = round(sum(v["humidity"]) / len(v["humidity"]))
+        wind_avg = round(sum(v["wind"]) / len(v["wind"]), 1)
+        weather_main = max(set(v["weather"]), key=v["weather"].count)
+        rain_pct = max(v["rain"]) if v["rain"] else 0
+        snow_pct = max(v["snow"]) if v["snow"] else 0
         hour = 12
-        bite = bite_rating(temp_day, pressure, wind, humidity, hour)
+        bite = bite_rating(temp_day, pressure_avg, wind_avg, humidity_avg, hour)
 
         out += (
             f"📅 *{weekday} {day.strftime('%d.%m')}*\n\n"
-            f"*🌦 Погода:* {weather_text(max(set(v['weather']), key=v['weather'].count), max(v['rain']), max(v['snow']))}\n"
+            f"*🌦 Погода:* {weather_text(weather_main, rain_pct, snow_pct)}\n"
             f"*🌡 Температура:* 🌞 {temp_day}°C / 🌙 {temp_night}°C\n"
-            f"*💧 Влажность:* {humidity}%\n"
-            f"*💨 Ветер:* {wind} м/с\n"
-            f"*🧭 Давление:* {pressure} мм ({pressure_comment(pressure)})\n"
+            f"*💧 Влажность:* {humidity_avg}%\n"
+            f"*💨 Ветер:* {wind_avg} м/с\n"
+            f"*🧭 Давление:* {pressure_avg} мм ({pressure_comment(pressure_avg)})\n"
             f"*🌙 Луна:* {moon_phase()}\n"
             f"*🎯 Клёв:* {bite}/5 {rating_emoji(bite)}\n\n"
         )
@@ -196,8 +216,10 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(out, parse_mode="Markdown", reply_markup=KEYBOARD)
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text == "📍 Текущий прогноз": await station(update, context)
-    elif update.message.text == "📅 Прогноз на 5 дней": await week(update, context)
+    if update.message.text == "📍 Текущий прогноз":
+        await station(update, context)
+    elif update.message.text == "📅 Прогноз на 5 дней":
+        await week(update, context)
 
 # ---------- MAIN ----------
 def main():
@@ -206,7 +228,7 @@ def main():
     app.add_handler(CommandHandler("station", station))
     app.add_handler(CommandHandler("week", week))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, buttons))
-    print("🚀 Бот Кирюхин запущен")
+    print("🚀 Бот Кирюхи запущен")
     app.run_polling()
 
 if __name__ == "__main__":
