@@ -108,8 +108,12 @@ def get_weather(city):
     weather_main = data["weather"][0]["main"]
     pop = data.get("rain", {}).get("1h", 0) if "rain" in data else data.get("snow", {}).get("1h", 0)
     pop = pop / 1 if pop else 0
+    # Добавим temp_min и temp_max для ночи и дня
+    temp_day = round(data["main"]["temp_max"])
+    temp_night = round(data["main"]["temp_min"])
     return {
-        "temp": round(data["main"]["temp"]),
+        "temp_day": temp_day,
+        "temp_night": temp_night,
         "humidity": data["main"]["humidity"],
         "wind": round(data["wind"]["speed"], 1),
         "pressure_mm": pressure_mm,
@@ -143,7 +147,7 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tz = timedelta(seconds=w["timezone_offset"])
     local_now = datetime.utcnow() + tz
     hour = local_now.hour
-    rating = bite_rating(w["temp"], w["pressure_mm"], w["wind"], w["humidity"], None, hour)
+    rating = bite_rating((w["temp_day"]+w["temp_night"])//2, w["pressure_mm"], w["wind"], w["humidity"], None, hour)
     emoji_rating_val = rating_emoji(rating)
     sunrise_time = (datetime.utcfromtimestamp(w["sunrise"]) + tz).strftime("%H:%M")
     sunset_time = (datetime.utcfromtimestamp(w["sunset"]) + tz).strftime("%H:%M")
@@ -155,7 +159,7 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"*📍 Город:* {city}\n"
         f"*🕒 Сейчас:* {local_now.strftime('%H:%M')}\n\n"
         f"*🌦 Погода:* {weather_text}\n"
-        f"*🌡 Воздух:* {w['temp']}°C\n"
+        f"*🌡 Температура: день {w['temp_day']}°C / ночь {w['temp_night']}°C*\n"
         f"*💧 Влажность:* {w['humidity']} %\n"
         f"*💨 Ветер:* {w['wind']} м/с\n"
         f"*🧭 Давление:* {w['pressure_mm']} мм рт.ст. ({pressure_comment(w['pressure_mm'])})\n"
@@ -191,23 +195,25 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if count >= 5:
                 break
             count += 1
-            # Берем дневной прогноз (ближайший к 12:00)
-            day_item = min(items, key=lambda x: abs(datetime.utcfromtimestamp(x["dt"]) + tz_offset - datetime.combine(day, datetime.min.time()) - timedelta(hours=12)))
-            temp_day = round(day_item["main"]["temp"])
-            humidity_avg = day_item["main"]["humidity"]
-            wind_avg = round(day_item["wind"]["speed"],1)
-            pressure_avg = hpa_to_mm(day_item["main"]["pressure"], city)
+            # берем дневной и ночной прогноз
+            day_item = max(items, key=lambda x: x["main"]["temp_max"])
+            night_item = min(items, key=lambda x: x["main"]["temp_min"])
+            temp_day = round(day_item["main"]["temp_max"])
+            temp_night = round(night_item["main"]["temp_min"])
+            humidity_avg = round(sum([i["main"]["humidity"] for i in items])/len(items))
+            wind_avg = round(sum([i["wind"]["speed"] for i in items])/len(items),1)
+            pressure_avg = hpa_to_mm(round(sum([i["main"]["pressure"] for i in items])/len(items)), city)
             main_weather = day_item["weather"][0]["main"]
-            pop_avg = day_item.get("pop", 0)
+            pop_avg = max(day_item.get("pop", 0), night_item.get("pop", 0))
             weather_text = format_weather(main_weather, pop_avg)
-            rating = bite_rating(temp_day, pressure_avg, wind_avg, humidity_avg, None, 12)
+            rating = bite_rating((temp_day+temp_night)//2, pressure_avg, wind_avg, humidity_avg, None, 12)
             emoji_val = rating_emoji(rating)
             weekday_str = weekdays[day.weekday()]
 
             forecast_text += (
                 f"*📅 {weekday_str} {day.strftime('%d.%m')}*\n"
                 f"*🌦 Погода:* {weather_text}\n"
-                f"🌡 Температура: {temp_day}°C\n"
+                f"🌡 Температура: день {temp_day}°C / ночь {temp_night}°C\n"
                 f"💧 Влажность: {humidity_avg}%\n"
                 f"💨 Ветер: {wind_avg} м/с\n"
                 f"🧭 Давление: {pressure_avg} мм рт.ст. ({pressure_comment(pressure_avg)})\n"
