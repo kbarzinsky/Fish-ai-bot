@@ -34,20 +34,22 @@ def moon_phase():
     known_new_moon = datetime(2000, 1, 6, tzinfo=timezone.utc)
     days = (datetime.now(timezone.utc) - known_new_moon).days
     phase = days % 29.53
-    phases = [
-        (1.8, "🌑 Новолуние"),
-        (5.5, "🌒 Растущая"),
-        (9.2, "🌓 Первая четверть"),
-        (12.9, "🌔 Растущая"),
-        (16.6, "🌕 Полнолуние"),
-        (20.3, "🌖 Убывающая"),
-        (24.0, "🌗 Последняя четверть"),
-        (27.7, "🌘 Убывающая"),
-    ]
-    for limit, name in phases:
-        if phase <= limit:
-            return name
-    return "🌑 Новолуние"
+    if phase < 1.8:
+        return "🌑 Новолуние"
+    elif phase < 5.5:
+        return "🌒 Растущая"
+    elif phase < 9.2:
+        return "🌓 Первая четверть"
+    elif phase < 12.9:
+        return "🌔 Растущая"
+    elif phase < 16.6:
+        return "🌕 Полнолуние"
+    elif phase < 20.3:
+        return "🌖 Убывающая"
+    elif phase < 24.0:
+        return "🌗 Последняя четверть"
+    else:
+        return "🌘 Убывающая"
 
 def pressure_comment(mm):
     if 735 <= mm <= 741:
@@ -85,9 +87,9 @@ def weather_text(main, rain, snow):
     }.get(main, "🌈 Погода")
 
     if rain > 0:
-        return f"🌧 Дождь {rain} мм"
+        return f"🌧 Дождь {rain}%"
     if snow > 0:
-        return f"❄️ Снег {snow} мм"
+        return f"❄️ Снег {snow}%"
     return base
 
 # ---------- WEATHER ----------
@@ -99,6 +101,8 @@ def get_weather(city):
     )
     r.raise_for_status()
     d = r.json()
+    rain_pct = min(int(d.get("rain", {}).get("1h", 0) * 10), 100)
+    snow_pct = min(int(d.get("snow", {}).get("1h", 0) * 10), 100)
 
     return {
         "temp": round(d["main"]["temp"]),
@@ -106,8 +110,8 @@ def get_weather(city):
         "wind": round(d["wind"]["speed"], 1),
         "pressure": hpa_to_mm(d["main"]["pressure"], city),
         "weather": d["weather"][0]["main"].lower(),
-        "rain": d.get("rain", {}).get("1h", 0),
-        "snow": d.get("snow", {}).get("1h", 0),
+        "rain": rain_pct,
+        "snow": snow_pct,
         "sunrise": d["sys"]["sunrise"],
         "sunset": d["sys"]["sunset"],
         "tz": d["timezone"]
@@ -176,21 +180,32 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         days[d]["humidity"].append(item["main"]["humidity"])
         days[d]["wind"].append(item["wind"]["speed"])
         days[d]["weather"].append(item["weather"][0]["main"].lower())
-        days[d]["rain"].append(item.get("rain", {}).get("1h", 0))
-        days[d]["snow"].append(item.get("snow", {}).get("1h", 0))
+        rain_pct = min(int(item.get("rain", {}).get("1h", 0) * 10), 100)
+        snow_pct = min(int(item.get("snow", {}).get("1h", 0) * 10), 100)
+        days[d]["rain"].append(rain_pct)
+        days[d]["snow"].append(snow_pct)
 
     out = f"📅 *Прогноз на 5 дней для {city}:*\n\n"
 
     for day, v in list(days.items())[:5]:
         weekday = WEEKDAYS_RU[day.weekday()]
+        temp_day = round(sum(v["day"]) / len(v["day"]))
+        temp_night = round(sum(v["night"]) / len(v["night"]))
+        pressure = hpa_to_mm(sum(v["pressure"]) / len(v["pressure"]), city)
+        wind = round(sum(v["wind"]) / len(v["wind"]), 1)
+        humidity = round(sum(v["humidity"]) / len(v["humidity"]))
+        hour = 12
+        bite = bite_rating(temp_day, pressure, wind, humidity, hour)
+
         out += (
             f"📅 *{weekday} {day.strftime('%d.%m')}*\n\n"
             f"*🌦 Погода:* {weather_text(max(set(v['weather']), key=v['weather'].count), max(v['rain']), max(v['snow']))}\n"
-            f"*🌡 Температура:* 🌞 {round(sum(v['day'])/len(v['day']))}°C / 🌙 {round(sum(v['night'])/len(v['night']))}°C\n"
-            f"*💧 Влажность:* {round(sum(v['humidity'])/len(v['humidity']))}%\n"
-            f"*💨 Ветер:* {round(sum(v['wind'])/len(v['wind']),1)} м/с\n"
-            f"*🧭 Давление:* {hpa_to_mm(sum(v['pressure'])/len(v['pressure']), city)} мм\n"
-            f"*🌙 Луна:* {moon_phase()}\n\n"
+            f"*🌡 Температура:* 🌞 {temp_day}°C / 🌙 {temp_night}°C\n"
+            f"*💧 Влажность:* {humidity}%\n"
+            f"*💨 Ветер:* {wind} м/с\n"
+            f"*🧭 Давление:* {pressure} мм\n"
+            f"*🌙 Луна:* {moon_phase()}\n"
+            f"*🎯 Клёв:* {bite}/5 {rating_emoji(bite)}\n\n"
         )
 
     await update.message.reply_text(out, parse_mode="Markdown", reply_markup=KEYBOARD)
@@ -213,4 +228,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-        
+    
