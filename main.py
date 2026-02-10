@@ -195,18 +195,17 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def expert(update: Update, context: ContextTypes.DEFAULT_TYPE):
     question = " ".join(context.args)
     if not question:
-        await update.message.reply_text(
-            "Задай вопрос о рыбалке, например: /expert Где сегодня лучше клюёт?"
-        )
+        await update.message.reply_text("Задай вопрос о рыбалке, например: /expert Где сегодня лучше клюёт?")
         return
 
     prompt = f"Ты рыболовный эксперт. Ответь подробно, дружелюбно и понятно: {question}"
 
     loop = asyncio.get_running_loop()
     try:
+        # Новый синтаксис openai>=1.0.0
         response = await loop.run_in_executor(
             None,
-            lambda: openai.ChatCompletion.create(
+            lambda: openai.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=300
@@ -228,4 +227,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-        
