@@ -2,6 +2,7 @@ import os
 import requests
 from dotenv import load_dotenv
 
+# ---------- Загрузка переменных окружения ----------
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
@@ -10,6 +11,7 @@ if not BOT_TOKEN:
 
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
+# ---------- Функции ----------
 def delete_webhook():
     """Удаляем старый webhook"""
     r = requests.post(f"{BASE_URL}/deleteWebhook")
@@ -38,9 +40,11 @@ def get_webhook_info():
     else:
         print(f"❌ Ошибка при проверке webhook: {r.text}")
 
-if name == "main":
+# ---------- Основной блок ----------
+if __name__ == "__main__":
     print("⏳ Начинаем очистку Telegram для локального запуска бота...")
     delete_webhook()
     clear_updates()
     get_webhook_info()
     print("🎯 Готово! Теперь можно запускать бота на ПК через run_polling()")
+    
