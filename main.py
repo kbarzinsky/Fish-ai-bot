@@ -68,9 +68,9 @@ def weather_text(main, rain, snow):
     }.get(main, "🌈 Погода")
 
     if rain > 0:
-        return f"🌧 Дождь {rain}%"
+        return f"🌧 Дождь {rain} мм"
     if snow > 0:
-        return f"❄️ Снег {snow}%"
+        return f"❄️ Снег {snow} мм"
     return base
 
 # ---------- WEATHER ----------
@@ -83,18 +83,14 @@ def get_weather(city):
     r.raise_for_status()
     d = r.json()
 
-    # считаем процент осадков от объема мм на час, максимум 100%
-    rain_pct = min(int(d.get("rain", {}).get("1h", 0) * 10), 100)
-    snow_pct = min(int(d.get("snow", {}).get("1h", 0) * 10), 100)
-
     return {
         "temp": round(d["main"]["temp"]),
         "humidity": d["main"]["humidity"],
         "wind": round(d["wind"]["speed"], 1),
         "pressure": hpa_to_mm(d["main"]["pressure"], city),
         "weather": d["weather"][0]["main"].lower(),
-        "rain": rain_pct,
-        "snow": snow_pct,
+        "rain": d.get("rain", {}).get("1h", 0),
+        "snow": d.get("snow", {}).get("1h", 0),
         "sunrise": d["sys"]["sunrise"],
         "sunset": d["sys"]["sunset"],
         "tz": d["timezone"]
@@ -166,10 +162,8 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         days[d]["humidity"].append(item["main"]["humidity"])
         days[d]["wind"].append(item["wind"]["speed"])
         days[d]["weather"].append(item["weather"][0]["main"].lower())
-        rain_pct = min(int(item.get("rain", {}).get("1h", 0) * 10), 100)
-        snow_pct = min(int(item.get("snow", {}).get("1h", 0) * 10), 100)
-        days[d]["rain"].append(rain_pct)
-        days[d]["snow"].append(snow_pct)
+        days[d]["rain"].append(item.get("rain", {}).get("1h", 0))
+        days[d]["snow"].append(item.get("snow", {}).get("1h", 0))
 
     out = f"📅 *Прогноз на 5 дней для {city}:*\n\n"
 
@@ -222,4 +216,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+        
