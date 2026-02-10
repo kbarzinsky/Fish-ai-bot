@@ -28,7 +28,7 @@ def get_moon_phase():
 
 def pressure_comment(pressure_mm):
     if 735 <= pressure_mm <= 741:
-        return "🌟 Идеальное для клева"
+        return "🌟 Идеальное для клёва"
     elif 742 <= pressure_mm <= 750:
         return "⚠ Немного высокое"
     elif pressure_mm < 735:
@@ -147,11 +147,10 @@ def get_week_forecast_full(city):
         rating = bite_rating(pressure_avg, wind_avg, humidity_avg, rain, 9)
         text += (
             f"*📅 {ru_weekday(day)} {day.strftime('%d.%m')}*\n"
-            f"{weather_icon(v['weather_main'])} Погода: {v['weather_desc'].capitalize()}\n"
+            f"{weather_icon(v['weather_main'])} Погода: {v['weather_desc'].capitalize()} | Осадки: {rain} мм\n"
             f"🌡 День: {temp_day}°C, Ночь: {temp_night}°C\n"
             f"💧 Влажность: {humidity_avg}%\n"
             f"💨 Ветер: {wind_avg} м/с\n"
-            f"🌧 Осадки: {rain} мм\n"
             f"🧭 Давление: {pressure_avg} мм рт.ст.\n"
             f"🌙 Луна: {moon}\n"
             f"🎯 Клев: {rating}/5 {rating_emoji(rating)}\n\n"
@@ -166,6 +165,8 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = datetime.utcnow() + tz
     hour = now.hour
     rating = bite_rating(w["pressure_mm"], w["wind"], w["humidity"], w["rain"], hour)
+    sunrise = (datetime.utcfromtimestamp(w["sunrise"]) + tz).strftime("%H:%M")
+    sunset = (datetime.utcfromtimestamp(w["sunset"]) + tz).strftime("%H:%M")
     text = (
         f"*🎣 Рыбацкая метео-станция*\n\n"
         f"*📍 Город:* {city}\n"
@@ -174,7 +175,8 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🌡 Воздух: {w['temp']}°C\n"
         f"💧 Влажность: {w['humidity']}%\n"
         f"💨 Ветер: {w['wind']} м/с\n"
-        f"🧭 Давление: {w['pressure_mm']} мм ({pressure_comment(w['pressure_mm'])})\n\n"
+        f"🧭 Давление: {w['pressure_mm']} мм ({pressure_comment(w['pressure_mm'])})\n"
+        f"🌅 Восход: {sunrise} | 🌇 Закат: {sunset}\n"
         f"🌙 Луна: {get_moon_phase()}\n"
         f"🎯 Клев: {rating}/5 {rating_emoji(rating)}"
     )
@@ -190,7 +192,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("station", station))
     app.add_handler(CommandHandler("week", week))
-    print("Бот запущен! Отправьте /station <город> или /week <город> в Telegram")
+    print("Бот запущен! /station <город> /week <город>")
     app.run_polling()
 
 if __name__ == "__main__":
