@@ -4,13 +4,17 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+import openai
 
 # ---------- LOAD ENV ----------
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY")
-if not BOT_TOKEN or not OPENWEATHER_KEY:
-    raise RuntimeError("❌ Не заданы BOT_TOKEN или OPENWEATHER_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+openai.api_key = OPENAI_API_KEY
+
+if not BOT_TOKEN or not OPENWEATHER_KEY or not OPENAI_API_KEY:
+    raise RuntimeError("❌ Не заданы BOT_TOKEN, OPENWEATHER_KEY или OPENAI_API_KEY")
 
 # ---------- UTILS ----------
 def hpa_to_mm(hpa, city=""):
@@ -187,12 +191,32 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     forecast_text = get_week_forecast_full(city)
     await update.message.reply_text(f"*Прогноз на 5 дней для {city}:*\n\n{forecast_text}", parse_mode="Markdown")
 
+async def expert(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    question = " ".join(context.args)
+    if not question:
+        await update.message.reply_text("Задай вопрос о рыбалке, например: /expert Где сегодня лучше клюёт?")
+        return
+
+    prompt = f"Ты рыболовный эксперт. Ответь подробно, дружелюбно и понятно: {question}"
+
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=300
+        )
+        answer = response.choices[0].message.content
+        await update.message.reply_text(answer)
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка GPT: {e}")
+
 # ---------- MAIN ----------
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("station", station))
     app.add_handler(CommandHandler("week", week))
-    print("Бот запущен! /station <город> /week <город>")
+    app.add_handler(CommandHandler("expert", expert))
+    print("Бот запущен! /station <город> /week <город> /expert <вопрос>")
     app.run_polling()
 
 if __name__ == "__main__":
