@@ -10,7 +10,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY")
 if not BOT_TOKEN or not OPENWEATHER_KEY:
-    raise RuntimeError("❌ Не заданы переменные окружения BOT_TOKEN или OPENWEATHER_KEY")
+    raise RuntimeError("❌ Не заданы BOT_TOKEN или OPENWEATHER_KEY")
 
 # ---------- UTILS ----------
 def hpa_to_mm(hpa, city=""):
@@ -34,6 +34,32 @@ def pressure_comment(pressure_mm):
         return "🌟 Идеальное для клева"
     elif 742 <= pressure_mm <= 750:
         return "⚠ Немного высокое"
+    elif pressure_mm < 735:
+        return "⚠ Низкое"
+    else:
+        return "⚠ Слишком высокое"
+
+def bite_rating(pressure, wind, humidity, rain, hour):
+    score = 0
+    if 735 <= pressure <= 741:
+        score += 3
+    elif 732 <= pressure < 735 or 741 < pressure <= 745:
+        score += 2
+    else:
+        score -= 1
+
+    if 1 <= wind <= 4:
+        score += 2
+    elif wind > 7:
+        score -= 2
+
+    if humidity >= 60:
+        score += 1
+
+    if rain > 0:
+        score += 1
+
+    if hour in range(5, 10) or hour in range(18, 22):
     elif pressure_mm < 735:
         return "⚠ Низкое"
     else:
