@@ -120,7 +120,7 @@ def get_weather(city):
 # ---------- HANDLERS ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🎣 Рыбацкий метео-бот готов к работе!",
+        "🎣 Кирюхин рыбацкий метео-бот готов к работе!",
         reply_markup=KEYBOARD
     )
 
