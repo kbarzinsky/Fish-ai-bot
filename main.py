@@ -63,30 +63,33 @@ def bite_rating(temp, pressure, wind, humidity, water_temp, hour):
 def rating_emoji(rating):
     return "🎣" * rating + "⚪" * (5 - rating)
 
-def weather_emoji(weather_main):
-    mapping = {
+def weather_emoji(main):
+    icons = {
         "Clear": "☀️",
         "Clouds": "☁️",
-        "Rain": "💦",
-        "Drizzle": "💧",
+        "Few clouds": "🌤",
+        "Scattered clouds": "🌥",
+        "Broken clouds": "⛅️",
+        "Rain": "🌧",
+        "Drizzle": "🌦",
         "Thunderstorm": "⛈",
         "Snow": "❄️",
         "Mist": "🌫",
         "Fog": "🌫",
-        "Haze": "🌫"
+        "Haze": "🌫",
     }
-    return mapping.get(weather_main, "🌡")
+    return icons.get(main, "")
 
-def get_precipitation(weather_dict):
-    main = weather_dict.get("weather_main", "")
-    pop = weather_dict.get("pop", 0)
-    pop_percent = int(pop * 100)
-    if main in ["Rain", "Drizzle", "Thunderstorm"]:
-        return f"Дождь {pop_percent}%"
-    elif main == "Snow":
-        return f"Снег {pop_percent}%"
-    else:
+def get_precipitation(item):
+    pop = round(item.get("pop", 0)*100) if "pop" in item else 0
+    weather_main = item.get("weather_main", "")
+    if pop == 0:
         return "Без осадков"
+    if weather_main.lower() in ["rain", "drizzle"]:
+        return f"Дождь {pop}%"
+    if weather_main.lower() == "snow":
+        return f"Снег {pop}%"
+    return f"{weather_main} {pop}%"
 
 # ---------- WEATHER ----------
 def get_weather(city):
@@ -95,9 +98,9 @@ def get_weather(city):
     r = requests.get(url, params=params, timeout=10)
     r.raise_for_status()
     data = r.json()
-    weather_main = data["weather"][0]["main"]
     pressure_mm = hpa_to_mm(data["main"]["pressure"], city)
-    pop = data.get("pop", 0)  # вероятность осадков
+    weather_main = data["weather"][0]["main"]
+    pop = data.get("pop", 0)
     return {
         "temp": round(data["main"]["temp"]),
         "humidity": data["main"]["humidity"],
@@ -120,10 +123,11 @@ def get_week_forecast_full(city):
         r = requests.get(url, params=params, timeout=10)
         r.raise_for_status()
         data = r.json()
-        if "list" not in data:
+
+        if "list" not in data or not data["list"]:
             return "❌ Прогноз недоступен. Проверьте город или API ключ."
 
-        tz_offset = timedelta(seconds=data["city"]["timezone"])
+        tz_offset = timedelta(seconds=data.get("city", {}).get("timezone", 0))
         moon = get_moon_phase()
         weekdays_ru = ["Пн","Вт","Ср","Чт","Пт","Сб","Вс"]
 
@@ -155,6 +159,9 @@ def get_week_forecast_full(city):
 
             temp_day = round(sum(values["temp_day"]) / len(values["temp_day"])) if values["temp_day"] else None
             temp_night = round(sum(values["temp_night"]) / len(values["temp_night"])) if values["temp_night"] else None
+            if not temp_day and not temp_night:
+                continue
+
             pressure_avg = round(hpa_to_mm(sum(values["pressure"]) / len(values["pressure"]), city))
             humidity_avg = round(sum(values["humidity"]) / len(values["humidity"]))
             wind_avg = round(sum(values["wind"]) / len(values["wind"]), 1)
@@ -180,7 +187,7 @@ def get_week_forecast_full(city):
             precip = get_precipitation({"weather_main": main_weather, "pop": pop_avg})
             weather_text = f"{weather_emoji(main_weather)} {weather_main_ru}"
             if "Без осадков" not in precip:
-                weather_text += f", {precip.split()[1]} {precip.split()[2]}%"
+                weather_text += f", {precip}"
 
             rating = bite_rating(temp_day, pressure_avg, wind_avg, humidity_avg, None, 9)
             emoji = rating_emoji(rating)
@@ -197,7 +204,7 @@ def get_week_forecast_full(city):
                 f"🎯 Клев: {rating}/5 {emoji}\n\n"
             )
 
-        return forecast_text
+        return forecast_text if forecast_text else "❌ Прогноз недоступен."
     except Exception as e:
         return f"❌ Не удалось получить прогноз: {e}"
 
@@ -206,6 +213,7 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
     city = "Курск"
     if context.args:
         city = " ".join(context.args)
+
     try:
         w = get_weather(city)
     except Exception as e:
@@ -215,12 +223,13 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tz_offset = timedelta(seconds=w["timezone_offset"])
     local_now = datetime.utcnow() + tz_offset
     hour = local_now.hour
+
     rating = bite_rating(w["temp"], w["pressure_mm"], w["wind"], w["humidity"], None, hour)
     emoji_rating_val = rating_emoji(rating)
     sunrise_time = (datetime.utcfromtimestamp(w["sunrise"]) + tz_offset).strftime("%H:%M")
     sunset_time = (datetime.utcfromtimestamp(w["sunset"]) + tz_offset).strftime("%H:%M")
-    moon = get_moon_phase()
 
+    precip_text = get_precipitation({"weather_main": w["weather_main"], "pop": w["pop"]})
     weather_main_ru = {
         "Clear": "Ясно",
         "Clouds": "Облачно",
@@ -236,10 +245,9 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Haze": "Мгла"
     }.get(w["weather_main"], w["weather_main"])
 
-    precip = get_precipitation({"weather_main": w["weather_main"], "pop": w.get("pop",0)})
     weather_text = f"{weather_emoji(w['weather_main'])} {weather_main_ru}"
-    if "Без осадков" not in precip:
-        weather_text += f", {precip.split()[1]} {precip.split()[2]}%"
+    if "Без осадков" not in precip_text:
+        weather_text += f", {precip_text}"
 
     text = (
         f"*🎣 Рыбацкая метео-станция от Кирюхи*\n\n"
@@ -252,8 +260,8 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"*🧭 Давление:* {w['pressure_mm']} мм рт.ст. ({pressure_comment(w['pressure_mm'])})\n"
         f"*🌅 Восход:* {sunrise_time}\n"
         f"*🌇 Закат:* {sunset_time}\n"
-        f"\n🌙 Луна: {moon}\n"
-        f"🎯 Клев: {rating}/5 {emoji_rating_val}"
+        f"*🌙 Луна:* {get_moon_phase()}\n"
+        f"*🎯 Клев:* {rating}/5 {emoji_rating_val}"
     )
 
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -262,6 +270,7 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     city = "Курск"
     if context.args:
         city = " ".join(context.args)
+
     forecast_text = get_week_forecast_full(city)
     await update.message.reply_text(f"*Прогноз на 5 дней для {city}:*\n\n{forecast_text}", parse_mode="Markdown")
 
@@ -275,4 +284,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
