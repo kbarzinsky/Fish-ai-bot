@@ -24,24 +24,30 @@ KEYBOARD = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# ---------- HELPERS ----------
+# ---------- UTILS ----------
 def hpa_to_mm(hpa, city=""):
     city_altitude = {"курск": 200, "москва": 156}
     altitude = city_altitude.get(city.lower(), 0)
     return round((hpa - altitude * 0.12) * 0.75006)
 
-def moon_phase_icon_from_value(p):
-    # p in [0..1] from onecall/daily['moon_phase'] OR custom numeric; map to icon+label
-    if p is None:
-        return "🌙"
-    if p < 0.03: return "🌑 Новолуние"
-    if p < 0.22: return "🌒 Растущая"
-    if p < 0.28: return "🌓 Первая четверть"
-    if p < 0.47: return "🌔 Растущая"
-    if p < 0.53: return "🌕 Полнолуние"
-    if p < 0.72: return "🌖 Убывающая"
-    if p < 0.78: return "🌗 Последняя четверть"
-    return "🌘 Убывающая"
+def moon_phase():
+    known_new_moon = datetime(2000, 1, 6, tzinfo=timezone.utc)
+    days = (datetime.now(timezone.utc) - known_new_moon).days
+    phase = days % 29.53
+    phases = [
+        (1.8, "🌑 Новолуние"),
+        (5.5, "🌒 Растущая"),
+        (9.2, "🌓 Первая четверть"),
+        (12.9, "🌔 Растущая"),
+        (16.6, "🌕 Полнолуние"),
+        (20.3, "🌖 Убывающая"),
+        (24.0, "🌗 Последняя четверть"),
+        (27.7, "🌘 Убывающая"),
+    ]
+    for limit, name in phases:
+        if phase <= limit:
+            return name
+    return "🌑 Новолуние"
 
 def pressure_comment(mm):
     if 735 <= mm <= 741:
@@ -54,14 +60,10 @@ def pressure_comment(mm):
 
 def bite_rating(temp, pressure, wind, humidity, hour):
     score = 0
-    if temp is None:
-        temp = 10
     if 735 <= pressure <= 741:
         score += 3
     if 1 <= wind <= 4:
         score += 2
-    elif wind > 7:
-        score -= 1
     if humidity >= 60:
         score += 1
     if hour in range(5, 10) or hour in range(18, 22):
@@ -71,194 +73,138 @@ def bite_rating(temp, pressure, wind, humidity, hour):
 def rating_emoji(r):
     return "🎣" * r + "⚪" * (5 - r)
 
-def select_weather_emoji_and_text(weather):
-    # weather is dict like {'id':..,'main':'Rain','description':'небольшой дождь'}
-    if not weather:
-        return ("🌤", "Погода")
-    main = weather.get("main", "").lower()
-    desc = weather.get("description", "").capitalize() or weather.get("main", "")
-    if "clear" in main or "ясн" in desc.lower():
-        return ("☀️", desc or "Ясно")
-    if "cloud" in main or "облак" in desc.lower():
-        return ("☁️", desc or "Облачно")
-    if "rain" in main or "дожд" in desc.lower():
-        return ("🌧", desc or "Дождь")
-    if "drizzle" in main or "морос" in desc.lower():
-        return ("🌦", desc or "Морось")
-    if "thunder" in main or "гроза" in desc.lower():
-        return ("⛈", desc or "Гроза")
-    if "snow" in main or "снег" in desc.lower():
-        return ("❄️", desc or "Снег")
-    if "mist" in main or "туман" in desc.lower():
-        return ("🌫", desc or "Туман")
-    return ("🌤", desc or main.capitalize())
+def weather_text(main, rain, snow):
+    base = {
+        "clear": "☀️ Ясно",
+        "clouds": "☁️ Облачно",
+        "rain": "🌧 Дождь",
+        "snow": "❄️ Снег",
+        "drizzle": "🌦 Морось",
+        "thunderstorm": "⛈ Гроза",
+        "mist": "🌫 Туман",
+    }.get(main, "🌈 Погода")
 
-def format_weather_text(weather_obj, precip_mm, pop):
-    # weather_obj expected from onecall entries: weather[0] dict
-    emoji, desc = select_weather_emoji_and_text(weather_obj)
-    pop_pct = int(round(pop * 100)) if pop is not None else 0
-    parts = f"{emoji} {desc}"
-    if precip_mm is not None and precip_mm > 0:
-        # show mm and percent if available
-        if pop is not None:
-            parts += f" {precip_mm} мм ({pop_pct}%)"
-        else:
-            parts += f" {precip_mm} мм"
-    else:
-        if pop is not None and pop_pct > 0:
-            parts += f" ({pop_pct}%)"
-    return parts
+    if rain > 0:
+        return f"🌧 Дождь {rain} мм ({min(int(rain*10),100)}%)"
+    if snow > 0:
+        return f"❄️ Снег {snow} мм ({min(int(snow*10),100)}%)"
+    return base
 
-# ---------- API helpers ----------
-def get_coords_and_basic(city):
-    """Call /weather to get coords and timezone (fallback). Returns dict or raises."""
-    url = "https://api.openweathermap.org/data/2.5/weather"
-    params = {"q": city, "appid": OPENWEATHER_KEY, "units": "metric", "lang": "ru"}
-    r = requests.get(url, params=params, timeout=10)
+# ---------- WEATHER ----------
+def get_weather(city):
+    r = requests.get(
+        "https://api.openweathermap.org/data/2.5/weather",
+        params={"q": city, "appid": OPENWEATHER_KEY, "units": "metric", "lang": "ru"},
+        timeout=10
+    )
     r.raise_for_status()
-    return r.json()
+    d = r.json()
 
-def get_onecall(lat, lon):
-    url = "https://api.openweathermap.org/data/2.5/onecall"
-    params = {"lat": lat, "lon": lon, "exclude": "minutely", "appid": OPENWEATHER_KEY, "units": "metric", "lang": "ru"}
-    r = requests.get(url, params=params, timeout=10)
-    r.raise_for_status()
-    return r.json()
+    return {
+        "temp": round(d["main"]["temp"]),
+        "humidity": d["main"]["humidity"],
+        "wind": round(d["wind"]["speed"], 1),
+        "pressure": hpa_to_mm(d["main"]["pressure"], city),
+        "weather": d["weather"][0]["main"].lower(),
+        "rain": d.get("rain", {}).get("1h", 0),
+        "snow": d.get("snow", {}).get("1h", 0),
+        "sunrise": d["sys"]["sunrise"],
+        "sunset": d["sys"]["sunset"],
+        "tz": d["timezone"]
+    }
 
 # ---------- HANDLERS ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🎣 Рыбацкий метео-бот готов! Выбери кнопку или используй /station /week",
+        "🎣 Рыбацкий метео-бот готов к работе!",
         reply_markup=KEYBOARD
     )
 
 async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    city = "Курск" if not context.args else " ".join(context.args)
-    try:
-        basic = get_coords_and_basic(city)
-        lat = basic["coord"]["lat"]
-        lon = basic["coord"]["lon"]
-        one = get_onecall(lat, lon)
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка получения данных: {e}")
-        return
+    city = "Курск"
+    if context.args:
+        city = " ".join(context.args)
 
-    tz_seconds = one.get("timezone_offset", basic.get("timezone", 0))
-    tz = timezone(timedelta(seconds=tz_seconds))
-    now_dt = datetime.now(tz)
+    w = get_weather(city)
+    tz = timezone(timedelta(seconds=w["tz"]))
+    now = datetime.now(tz)
 
-    current = one.get("current", {})
-    daily0 = one.get("daily", [None])[0] or {}
-
-    # precipitation: prefer current rain/snow mm, else hourly[0] or daily rain
-    precip_mm = None
-    if "rain" in current and isinstance(current["rain"], dict):
-        precip_mm = current["rain"].get("1h", 0)
-    elif "snow" in current and isinstance(current["snow"], dict):
-        precip_mm = current["snow"].get("1h", 0)
-    else:
-        # try hourly 0
-        hr0 = one.get("hourly", [{}])[0]
-        if hr0:
-            precip_mm = hr0.get("rain", {}).get("1h") or hr0.get("snow", {}).get("1h") or 0
-        else:
-            precip_mm = daily0.get("rain", 0) or daily0.get("snow", 0) or 0
-
-    # pop for current: try hourly[0].pop then daily0.pop
-    pop = None
-    if one.get("hourly"):
-        pop = one["hourly"][0].get("pop", None)
-    if pop is None:
-        pop = daily0.get("pop", None)
-
-    weather_obj = current.get("weather", [{}])[0]
-    weather_line = format_weather_text(weather_obj, precip_mm or 0, pop if pop is not None else 0)
-
-    # temperatures: use daily0 temps if present, else current temp
-    temp_day = None
-    temp_night = None
-    if daily0.get("temp"):
-        temp_day = round(daily0["temp"].get("day"))
-        temp_night = round(daily0["temp"].get("night"))
-    else:
-        temp_day = round(current.get("temp", 0))
-        temp_night = temp_day - 4  # fallback estimate
-
-    humidity = current.get("humidity", 0)
-    wind = current.get("wind_speed", 0)
-    pressure_hpa = current.get("pressure", None)
-    pressure_mm = hpa_to_mm(pressure_hpa, city) if pressure_hpa is not None else None
-
-    moon_val = daily0.get("moon_phase", None)
-    moon_str = moon_phase_icon_from_value(moon_val) if moon_val is not None else "🌙"
-
-    bite = bite_rating(temp_day, pressure_mm or 740, wind, humidity, now_dt.hour)
+    weekday = WEEKDAYS_RU[now.weekday()]
+    rating = bite_rating(w["temp"], w["pressure"], w["wind"], w["humidity"], now.hour)
 
     text = (
         f"🎣 *Текущий прогноз*\n\n"
         f"*📍 Город:* {city}\n"
-        f"*📅 День:* {WEEKDAYS_RU[now_dt.weekday()]} {now_dt.strftime('%d.%m')}\n"
-        f"*🕒 Сейчас:* {now_dt.strftime('%H:%M')}\n\n"
-        f"*🌦 Погода:* {weather_line}\n"
-        f"*🌡 Температура:* 🌞 {temp_day}°C / 🌙 {temp_night}°C\n"
-        f"*💧 Влажность:* {humidity}%\n"
-        f"*💨 Ветер:* {wind} м/с\n"
-        f"*🧭 Давление:* {pressure_mm} мм ({pressure_comment(pressure_mm)})\n"
-        f"*🌅 Восход:* {datetime.fromtimestamp(current.get('sunrise', daily0.get('sunrise', 0)), tz).strftime('%H:%M')}\n"
-        f"*🌇 Закат:* {datetime.fromtimestamp(current.get('sunset', daily0.get('sunset', 0)), tz).strftime('%H:%M')}\n"
-        f"*🌙 Луна:* {moon_str}\n"
-        f"*🎯 Клёв:* {bite}/5 {rating_emoji(bite)}"
+        f"*📅 День:* {weekday} {now.strftime('%d.%m')}\n"
+        f"*🕒 Сейчас:* {now.strftime('%H:%M')}\n\n"
+        f"*🌦 Погода:* {weather_text(w['weather'], w['rain'], w['snow'])}\n"
+        f"*🌡 Температура:* 🌞 день {w['temp']}°C / 🌙 ночь ~{w['temp'] - 4}°C\n"
+        f"*💧 Влажность:* {w['humidity']}%\n"
+        f"*💨 Ветер:* {w['wind']} м/с\n"
+        f"*🧭 Давление:* {w['pressure']} мм ({pressure_comment(w['pressure'])})\n"
+        f"*🌅 Восход:* {datetime.fromtimestamp(w['sunrise'], tz).strftime('%H:%M')}\n"
+        f"*🌇 Закат:* {datetime.fromtimestamp(w['sunset'], tz).strftime('%H:%M')}\n"
+        f"*🌙 Луна:* {moon_phase()}\n"
+        f"*🎯 Клёв:* {rating}/5 {rating_emoji(rating)}"
     )
 
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=KEYBOARD)
 
 async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    city = "Курск" if not context.args else " ".join(context.args)
-    try:
-        basic = get_coords_and_basic(city)
-        lat = basic["coord"]["lat"]
-        lon = basic["coord"]["lon"]
-        one = get_onecall(lat, lon)
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка получения данных: {e}")
-        return
+    city = "Курск"
+    if context.args:
+        city = " ".join(context.args)
 
-    tz_seconds = one.get("timezone_offset", basic.get("timezone", 0))
-    tz = timezone(timedelta(seconds=tz_seconds))
-    daily = one.get("daily", [])
+    r = requests.get(
+        "https://api.openweathermap.org/data/2.5/forecast",
+        params={"q": city, "appid": OPENWEATHER_KEY, "units": "metric", "lang": "ru"},
+        timeout=10
+    )
+    r.raise_for_status()
+    data = r.json()
+
+    tz = timezone(timedelta(seconds=data["city"]["timezone"]))
+    days = {}
+
+    for item in data["list"]:
+        dt = datetime.fromtimestamp(item["dt"], tz)
+        d = dt.date()
+        days.setdefault(d, {"day": [], "night": [], "pressure": [], "humidity": [], "wind": [], "weather": [], "rain": [], "snow": []})
+
+        (days[d]["day"] if 6 <= dt.hour <= 18 else days[d]["night"]).append(item["main"]["temp"])
+        days[d]["pressure"].append(item["main"]["pressure"])
+        days[d]["humidity"].append(item["main"]["humidity"])
+        days[d]["wind"].append(item["wind"]["speed"])
+        days[d]["weather"].append(item["weather"][0]["main"].lower())
+        days[d]["rain"].append(item.get("rain", {}).get("1h", 0))
+        days[d]["snow"].append(item.get("snow", {}).get("1h", 0))
 
     out = f"📅 *Прогноз на 5 дней для {city}:*\n\n"
 
-    # iterate next 5 days (including today)
-    for d in daily[:5]:
-        if not d:
-            continue
-        dt = datetime.fromtimestamp(d.get("dt", 0), tz)
-        weekday = WEEKDAYS_RU[dt.weekday()]
-        # weather and precip
-        weather_obj = d.get("weather", [{}])[0]
-        precip_mm = d.get("rain", 0) or d.get("snow", 0) or 0
-        pop = d.get("pop", 0)
-        weather_line = format_weather_text(weather_obj, precip_mm, pop)
+    for day, v in list(days.items())[:5]:
+        weekday = WEEKDAYS_RU[day.weekday()]
+        temp_day = round(sum(v['day']) / len(v['day'])) if v['day'] else None
+        temp_night = round(sum(v['night']) / len(v['night'])) if v['night'] else None
+        humidity_avg = round(sum(v['humidity']) / len(v['humidity']))
+        wind_avg = round(sum(v['wind']) / len(v['wind']), 1)
+        pressure_avg = hpa_to_mm(sum(v['pressure']) / len(v['pressure']), city)
+        weather_main = max(set(v['weather']), key=v['weather'].count)
+        rain_max = max(v['rain']) if v['rain'] else 0
+        snow_max = max(v['snow']) if v['snow'] else 0
 
-        temp_day = round(d.get("temp", {}).get("day")) if d.get("temp") else None
-        temp_night = round(d.get("temp", {}).get("night")) if d.get("temp") else None
-        humidity = d.get("humidity", 0)
-        wind = d.get("wind_speed", 0)
-        pressure_mm = hpa_to_mm(d.get("pressure", 1013), city)
-        moon_str = moon_phase_icon_from_value(d.get("moon_phase", None))
-        hour = 12  # midday rating heuristic
-        bite = bite_rating(temp_day or temp_night or 10, pressure_mm, wind, humidity, hour)
+        # Клёв для дня (9 утра)
+        rating = bite_rating(temp_day, pressure_avg, wind_avg, humidity_avg, 9)
+        rating_emoji_val = rating_emoji(rating)
 
         out += (
-            f"📅 *{weekday} {dt.strftime('%d.%m')}*\n\n"
-            f"*🌦 Погода:* {weather_line}\n"
+            f"📅 *{weekday} {day.strftime('%d.%m')}*\n\n"
+            f"*🌦 Погода:* {weather_text(weather_main, rain_max, snow_max)}\n"
             f"*🌡 Температура:* 🌞 {temp_day}°C / 🌙 {temp_night}°C\n"
-            f"*💧 Влажность:* {humidity}%\n"
-            f"*💨 Ветер:* {wind} м/с\n"
-            f"*🧭 Давление:* {pressure_mm} мм ({pressure_comment(pressure_mm)})\n"
-            f"*🌙 Луна:* {moon_str}\n"
-            f"*🎯 Клёв:* {bite}/5 {rating_emoji(bite)}\n\n"
+            f"*💧 Влажность:* {humidity_avg}%\n"
+            f"*💨 Ветер:* {wind_avg} м/с\n"
+            f"*🧭 Давление:* {pressure_avg} мм ({pressure_comment(pressure_avg)})\n"
+            f"*🌙 Луна:* {moon_phase()}\n"
+            f"*🎯 Клёв:* {rating}/5 {rating_emoji_val}\n\n"
         )
 
     await update.message.reply_text(out, parse_mode="Markdown", reply_markup=KEYBOARD)
