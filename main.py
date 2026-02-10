@@ -14,11 +14,7 @@ if not BOT_TOKEN or not OPENWEATHER_KEY:
 
 # ---------- UTILS ----------
 def hpa_to_mm(hpa, city=""):
-    """Конвертация давления hPa → мм рт. ст. с поправкой на высоту города"""
-    city_altitude = {
-        "курск": 200,
-        "москва": 156,
-    }
+    city_altitude = {"курск": 200, "москва": 156}
     altitude = city_altitude.get(city.lower(), 0)
     hpa_corrected = hpa - (altitude * 0.12)
     return round(hpa_corrected * 0.75006)
@@ -65,10 +61,6 @@ def rating_emoji(rating):
     return "🎣" * rating + "⚪" * (5 - rating)
 
 def format_weather(weather_main: str, pop: float) -> str:
-    """
-    Возвращает красиво форматированную строку погоды:
-    ☀️ Ясно / 🌧 Дождь 40% / ❄️ Снег 20% и т.д.
-    """
     pop_percent = round(pop * 100)
     main_map = {
         "Clear": "Ясно",
@@ -116,8 +108,12 @@ def get_weather(city):
     weather_main = data["weather"][0]["main"]
     pop = data.get("rain", {}).get("1h", 0) if "rain" in data else data.get("snow", {}).get("1h", 0)
     pop = pop / 1 if pop else 0
+    # Добавим temp_min и temp_max для ночи и дня
+    temp_day = round(data["main"]["temp_max"])
+    temp_night = round(data["main"]["temp_min"])
     return {
-        "temp": round(data["main"]["temp"]),
+        "temp_day": temp_day,
+        "temp_night": temp_night,
         "humidity": data["main"]["humidity"],
         "wind": round(data["wind"]["speed"], 1),
         "pressure_mm": pressure_mm,
@@ -130,12 +126,18 @@ def get_weather(city):
         "pop": pop
     }
 
+def get_forecast(city):
+    url = "https://api.openweathermap.org/data/2.5/forecast"
+    params = {"q": city, "appid": OPENWEATHER_KEY, "units": "metric", "lang": "ru"}
+    r = requests.get(url, params=params, timeout=10)
+    r.raise_for_status()
+    return r.json()
+
 # ---------- HANDLERS ----------
 async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
     city = "Курск"
     if context.args:
         city = " ".join(context.args)
-
     try:
         w = get_weather(city)
     except Exception as e:
@@ -145,12 +147,11 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tz = timedelta(seconds=w["timezone_offset"])
     local_now = datetime.utcnow() + tz
     hour = local_now.hour
-    rating = bite_rating(w["temp"], w["pressure_mm"], w["wind"], w["humidity"], None, hour)
+    rating = bite_rating((w["temp_day"]+w["temp_night"])//2, w["pressure_mm"], w["wind"], w["humidity"], None, hour)
     emoji_rating_val = rating_emoji(rating)
     sunrise_time = (datetime.utcfromtimestamp(w["sunrise"]) + tz).strftime("%H:%M")
     sunset_time = (datetime.utcfromtimestamp(w["sunset"]) + tz).strftime("%H:%M")
     moon = get_moon_phase()
-
     weather_text = format_weather(w["weather_main"], w["pop"])
 
     text = (
@@ -158,7 +159,7 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"*📍 Город:* {city}\n"
         f"*🕒 Сейчас:* {local_now.strftime('%H:%M')}\n\n"
         f"*🌦 Погода:* {weather_text}\n"
-        f"*🌡 Воздух:* {w['temp']}°C\n"
+        f"*🌡 Температура: день {w['temp_day']}°C / ночь {w['temp_night']}°C*\n"
         f"*💧 Влажность:* {w['humidity']} %\n"
         f"*💨 Ветер:* {w['wind']} м/с\n"
         f"*🧭 Давление:* {w['pressure_mm']} мм рт.ст. ({pressure_comment(w['pressure_mm'])})\n"
@@ -174,15 +175,7 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         city = " ".join(context.args)
     try:
-        url = "https://api.openweathermap.org/data/2.5/forecast"
-        params = {"q": city, "appid": OPENWEATHER_KEY, "units": "metric", "lang": "ru"}
-        r = requests.get(url, params=params, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        if "list" not in data:
-            await update.message.reply_text("❌ Прогноз недоступен")
-            return
-
+        data = get_forecast(city)
         tz_offset = timedelta(seconds=data["city"]["timezone"])
         moon = get_moon_phase()
 
@@ -191,46 +184,36 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             dt = datetime.utcfromtimestamp(item["dt"]) + tz_offset
             day_key = dt.date()
             if day_key not in days:
-                days[day_key] = {
-                    "temp_day": [], "temp_night": [],
-                    "pressure": [], "humidity": [], "wind": [],
-                    "weather_main": [], "pop": []
-                }
-            hour = dt.hour
-            if 6 <= hour <= 18:
-                days[day_key]["temp_day"].append(item["main"]["temp"])
-            else:
-                days[day_key]["temp_night"].append(item["main"]["temp"])
-            days[day_key]["pressure"].append(item["main"]["pressure"])
-            days[day_key]["humidity"].append(item["main"]["humidity"])
-            days[day_key]["wind"].append(item["wind"]["speed"])
-            days[day_key]["weather_main"].append(item["weather"][0]["main"])
-            pop_val = item.get("pop", 0)
-            days[day_key]["pop"].append(pop_val)
+                days[day_key] = []
+            days[day_key].append(item)
 
         weekdays = ["Пн","Вт","Ср","Чт","Пт","Сб","Вс"]
         forecast_text = ""
         count = 0
-        for day, values in days.items():
+
+        for day, items in days.items():
             if count >= 5:
                 break
             count += 1
-            temp_day = round(sum(values["temp_day"]) / len(values["temp_day"])) if values["temp_day"] else None
-            temp_night = round(sum(values["temp_night"]) / len(values["temp_night"])) if values["temp_night"] else None
-            pressure_avg = round(hpa_to_mm(sum(values["pressure"]) / len(values["pressure"]), city))
-            humidity_avg = round(sum(values["humidity"]) / len(values["humidity"]))
-            wind_avg = round(sum(values["wind"]) / len(values["wind"]), 1)
-            main_weather = max(set(values["weather_main"]), key=values["weather_main"].count)
-            pop_avg = sum(values["pop"]) / len(values["pop"]) if values["pop"] else 0
+            # берем дневной и ночной прогноз
+            day_item = max(items, key=lambda x: x["main"]["temp_max"])
+            night_item = min(items, key=lambda x: x["main"]["temp_min"])
+            temp_day = round(day_item["main"]["temp_max"])
+            temp_night = round(night_item["main"]["temp_min"])
+            humidity_avg = round(sum([i["main"]["humidity"] for i in items])/len(items))
+            wind_avg = round(sum([i["wind"]["speed"] for i in items])/len(items),1)
+            pressure_avg = hpa_to_mm(round(sum([i["main"]["pressure"] for i in items])/len(items)), city)
+            main_weather = day_item["weather"][0]["main"]
+            pop_avg = max(day_item.get("pop", 0), night_item.get("pop", 0))
             weather_text = format_weather(main_weather, pop_avg)
-            rating = bite_rating(temp_day, pressure_avg, wind_avg, humidity_avg, None, 9)
+            rating = bite_rating((temp_day+temp_night)//2, pressure_avg, wind_avg, humidity_avg, None, 12)
             emoji_val = rating_emoji(rating)
             weekday_str = weekdays[day.weekday()]
 
             forecast_text += (
                 f"*📅 {weekday_str} {day.strftime('%d.%m')}*\n"
-                f"{weather_text}\n"
-                f"🌡 День: {temp_day}°C, Ночь: {temp_night}°C\n"
+                f"*🌦 Погода:* {weather_text}\n"
+                f"🌡 Температура: день {temp_day}°C / ночь {temp_night}°C\n"
                 f"💧 Влажность: {humidity_avg}%\n"
                 f"💨 Ветер: {wind_avg} м/с\n"
                 f"🧭 Давление: {pressure_avg} мм рт.ст. ({pressure_comment(pressure_avg)})\n"
