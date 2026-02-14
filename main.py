@@ -57,7 +57,8 @@ def bite_rating(temp, pressure, wind, humidity, hour):
 
 def rating_emoji(r): return "🎣"*r + "⚪"*(5-r)
 
-def weather_text(main,rain,snow):
+def weather_text(main, rain, snow):
+    main = main.lower()
     base = {
         "clear":"☀️ Ясно",
         "clouds":"☁️ Облачно",
@@ -65,11 +66,15 @@ def weather_text(main,rain,snow):
         "snow":"❄️ Снег",
         "drizzle":"🌦 Морось",
         "thunderstorm":"⛈ Гроза",
-        "mist":"🌫 Туман"
-    }.get(main,"🌈 Погода")
-    if rain>0: return f"🌧 Дождь {rain}%"
-    if snow>0: return f"❄️ Снег {snow}%"
-    return base
+        "mist":"🌫 Туман",
+        "fog":"🌫 Туман",
+        "haze":"🌫 Мгла"
+    }.get(main)
+
+    if rain > 0: return f"🌧 Дождь {rain}%"
+    if snow > 0: return f"❄️ Снег {snow}%"
+    if base: return base
+    return f"🌈 {main.capitalize()}"
 
 # ---------- WEATHER ----------
 def get_weather(city):
@@ -115,7 +120,7 @@ async def station(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"*📍 Город:* {city}\n"
         f"*📅 День:* {weekday} {now.strftime('%d.%m')}\n"
         f"*🕒 Сейчас:* {now.strftime('%H:%M')}\n\n"
-        f"*🌦 Погода:* {weather_text(w['weather'],w['rain'],w['snow'])}\n"
+        f"*🌦 Погода:* {weather_text(w['weather'], w['rain'], w['snow'])}\n"
         f"*🌡 Температура:* {w['temp']}°C\n"
         f"*💧 Влажность:* {w['humidity']}%\n"
         f"*💨 Ветер:* {w['wind']} м/с\n"
@@ -195,4 +200,3 @@ def main():
 
 if __name__=="__main__":
     main()
-    
